@@ -31,8 +31,27 @@ function safeImgUrl(u) {
 }
 function fetchWithTimeout(url, opts = {}, ms = 15000) {
   const ctrl = new AbortController();
-  const id = setTimeout(() => ctrl.abort(), ms);
-  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(id));
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  const upstream = opts.signal;
+  if (upstream) {
+    if (upstream.aborted) ctrl.abort();
+    else upstream.addEventListener('abort', () => ctrl.abort(), { once: true });
+  }
+  const rest = { ...opts };
+  delete rest.signal;
+  return fetch(url, { ...rest, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+}
+
+function coverFallback(img) {
+  if (!img) return;
+  img.onerror = null;
+  img.src = FALLBACK_IMG;
+}
+
+function bookTags(book) {
+  const raw = book && book.Tags;
+  const list = Array.isArray(raw) ? raw : String(raw == null ? '' : raw).split(',');
+  return list.map(tag => String(tag == null ? '' : tag).trim()).filter(Boolean);
 }
 
 // ---- IndexedDB ----

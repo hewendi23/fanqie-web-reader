@@ -86,10 +86,25 @@ window.addEventListener('hashchange', router);
 let S = { key: '', tab: 3, loading: false, tabCache: {} };
 let _searchReq = 0;
 function routePath() { return (location.hash.slice(1) || 'discover').split('?')[0]; }
-function searchStillCurrent(key) {
-  if (routePath() !== 'search') return false;
+function currentSearchQuery() {
+  if (routePath() !== 'search') return '';
   const qs = (location.hash.slice(1) || '').split('?')[1] || '';
-  return (new URLSearchParams(qs).get('q') || '') === key;
+  try { return new URLSearchParams(qs).get('q') || ''; }
+  catch (e) { return ''; }
+}
+function searchStillCurrent(key) { return currentSearchQuery() === key; }
+function searchHasMore(data, batch) {
+  if (data && typeof data.has_more === 'boolean') return data.has_more;
+  return (batch || []).length >= 20;
+}
+function paintSearch() {
+  try { renderResults(); }
+  catch (e) {
+    console.error(e);
+    S.loading = false;
+    S.error = '搜索结果无法显示，请重试';
+    renderSearchEmpty($('app'));
+  }
 }
 function getTabData() { return S.tabCache[S.tab] || { books: [], filtered: [], offset: 0, hasMore: false, sortBy: 'default', tagFilter: '' }; }
 function saveTabData(d) { S.tabCache[S.tab] = d; }
@@ -188,7 +203,7 @@ function selectTab(id) {
 function applyFilters() {
   const td = getTabData();
   let list = td.books.slice();
-  if (td.tagFilter) list = list.filter(b => (b.Tags||'').toLowerCase().includes(td.tagFilter.toLowerCase()));
+  if (td.tagFilter) list = list.filter(b => bookTags(b).join(',').toLowerCase().includes(td.tagFilter.toLowerCase()));
   if (td.sortBy==='read') list.sort((a,b)=>(b.ReadCount||0)-(a.ReadCount||0));
   else if (td.sortBy==='words') list.sort((a,b)=>(b.WordCount||0)-(a.WordCount||0));
   else if (td.sortBy==='chapters') list.sort((a,b)=>(b.ChapterCount||0)-(a.ChapterCount||0));
@@ -204,29 +219,36 @@ async function doSearch() {
     if (path !== 'shelf' && path !== 'discover') navigate('discover');
     return;
   }
-  // Update URL so back button logic detects search results state
-  const targetHash = `search?q=${encodeURIComponent(key)}`;
-  if (location.hash.slice(1) !== targetHash) {
-    location.hash = targetHash;
-    return; // hashchange will call router() which calls doSearch() again via the route handler
+  // Compare the decoded query. Raw hash text can differ by percent-encoding
+  // and then assigning location.hash does not fire hashchange, so the fetch
+  // never starts and the page stays blank under the title 「搜索」.
+  if (currentSearchQuery() !== key) {
+    const before = location.hash;
+    location.hash = `search?q=${encodeURIComponent(key)}`;
+    if (location.hash !== before) return;
   }
-  S.key = key; S.loading = true;
+  if (typeof abortDiscoverLoads === 'function') abortDiscoverLoads();
+  S.key = key; S.loading = true; S.error = '';
   const req = ++_searchReq;
   saveTabData({ books: [], filtered: [], offset: 0, hasMore: false, sortBy: 'default', tagFilter: '' });
-  hideSuggest(); addHistory(key); updateClearBtn(); renderResults();
+  hideSuggest(); addHistory(key); updateClearBtn(); paintSearch();
   try {
-    const r = await fetchWithTimeout(`${API}/api/search?key=${encodeURIComponent(key)}&tab_type=${S.tab}`);
+    const r = await fetchWithTimeout(`${API}/api/search?key=${encodeURIComponent(key)}&tab_type=${S.tab}`, {}, 30000);
     const data = await r.json();
     if (req !== _searchReq || !searchStillCurrent(key)) { S.loading = false; return; }
     const td = getTabData();
-    td.books = data.code===200 ? (data.data||[]) : [];
-    td.hasMore = td.books.length >= 10; applyFilters();
+    const batch = data.code===200 && Array.isArray(data.data) ? data.data : [];
+    td.books = batch;
+    td.hasMore = data.code===200 ? searchHasMore(data, batch) : false;
+    S.error = data.code===200 ? '' : '搜索失败，请稍后重试';
+    applyFilters();
   } catch(e) {
     if (req !== _searchReq || !searchStillCurrent(key)) { S.loading = false; return; }
     getTabData().books = [];
+    S.error = '搜索失败，请稍后重试';
   }
   S.loading = false;
-  if (req === _searchReq && searchStillCurrent(key)) renderResults();
+  if (req === _searchReq && searchStillCurrent(key)) paintSearch();
 }
 
 function addHistory(key) {
@@ -237,8 +259,8 @@ function addHistory(key) {
   saveSearchHistory(data.searchHistory);
 }
 
-function setSort(s) { const td = getTabData(); td.sortBy = td.sortBy===s?'default':s; applyFilters(); renderResults(); }
-function setTag(t) { const td = getTabData(); td.tagFilter = td.tagFilter===t?'':t; applyFilters(); renderResults(); }
+function setSort(s) { const td = getTabData(); td.sortBy = td.sortBy===s?'default':s; applyFilters(); paintSearch(); }
+function setTag(t) { const td = getTabData(); td.tagFilter = td.tagFilter===t?'':t; applyFilters(); paintSearch(); }
 
 async function loadMore() {
   if (S.loading) return;
@@ -246,20 +268,23 @@ async function loadMore() {
   if (!td.hasMore || !searchStillCurrent(S.key)) return;
   const req = ++_searchReq;
   const key = S.key;
-  S.loading = true; td.offset += 10; renderResults();
+  S.loading = true; S.error = ''; td.offset += 20; paintSearch();
   try {
-    const r = await fetchWithTimeout(`${API}/api/search?key=${encodeURIComponent(key)}&tab_type=${S.tab}&offset=${td.offset}`);
+    const r = await fetchWithTimeout(`${API}/api/search?key=${encodeURIComponent(key)}&tab_type=${S.tab}&offset=${td.offset}`, {}, 30000);
     const data = await r.json();
     if (req !== _searchReq || !searchStillCurrent(key)) { S.loading = false; return; }
-    const more = data.code===200 ? (data.data||[]) : [];
+    const more = data.code===200 && Array.isArray(data.data) ? data.data : [];
     td.books = td.books.concat(more);
-    td.hasMore = more.length >= 10; applyFilters();
+    td.hasMore = data.code===200 ? searchHasMore(data, more) : false;
+    if (data.code!==200) S.error = '搜索失败，请稍后重试';
+    applyFilters();
   } catch(e) {
     if (req !== _searchReq || !searchStillCurrent(key)) { S.loading = false; return; }
     td.hasMore = false;
+    S.error = '搜索失败，请稍后重试';
   }
   S.loading = false;
-  if (req === _searchReq && searchStillCurrent(key)) renderResults();
+  if (req === _searchReq && searchStillCurrent(key)) paintSearch();
 }
 
 // ====== Search suggest + clear ======
