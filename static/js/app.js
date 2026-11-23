@@ -780,6 +780,24 @@ function skeletonHome() {
   return h;
 }
 
+function skeletonBookstore() {
+  return `<div class="skel-discover">
+    <div class="skel-discover-tags" style="margin-top:8px">
+      ${[64, 64, 64].map(w => `<div class="skel-pill" style="width:${w}px;height:32px"></div>`).join('')}
+    </div>
+    <div class="skel-discover-section">
+      <div class="skel-line" style="height:14px;margin-right:60%;margin-bottom:12px"></div>
+      <div class="skel-discover-tags">
+        ${[82, 90, 72, 84, 78].map(w => `<div class="skel-pill" style="width:${w}px;height:32px"></div>`).join('')}
+      </div>
+    </div>
+    <div class="skel-discover-section">
+      <div class="skel-line" style="height:14px;margin-right:50%;margin-bottom:12px"></div>
+      <div class="book-rail">${[0, 1, 2, 3].map(() => '<div class="skel-rail-card"></div>').join('')}</div>
+    </div>
+  </div>`;
+}
+
 // 2. Search results skeleton (book cards list)
 function skeletonResults(count) {
   let h = '<div class="skeleton-list">';
