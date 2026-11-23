@@ -1,4 +1,3 @@
-import re
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -7,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse, JSONResponse
 
+from routers.chapter_content import html_paragraphs
 from shared import UNIDBG_API, _fanqie_client, client, community_get, logger, resolve_version
 
 router = APIRouter()
@@ -77,23 +77,8 @@ async def _unidbg_get(path: str, params: dict | None = None) -> dict | None:
 
 
 def _html_paragraphs(content_html: str) -> list[str]:
-    """按 <p> 块提取段落文本，剥离除 <img> 外的全部内嵌标签。
-
-    兼容两种上游格式：社区 API 的 <p>纯文本</p>，以及 unidbg 的
-    <p><blk>文本</blk></p>（文本还包在 <blk> 内嵌标签里）。
-    保留 <img> 是为了插图类章节——reader.js 会识别纯图片段落并渲染。
-    """
-    content_html = content_html or ""
-    paras = []
-    for m in re.finditer(r'<p[^>]*>(.*?)</p>', content_html, re.S):
-        text = re.sub(r'<(?!img\b)[^>]+>', '', m.group(1)).strip()
-        if text:
-            paras.append(text)
-    if paras:
-        return paras
-    # 无 <p> 结构时整体剥标签（保留 <img>）、按行分段
-    text = re.sub(r'<(?!img\b)[^>]+>', '\n', content_html)
-    return [l.strip() for l in text.split('\n') if l.strip()]
+    """按阅读顺序提取段落，保留插图（见 routers/chapter_content.py）。"""
+    return html_paragraphs(content_html)
 
 
 # ====== 搜索 ======

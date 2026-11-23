@@ -18,15 +18,32 @@ const FONTS = [
 function $(id) { return document.getElementById(id); }
 function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 function escapeAttr(s) { return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+const IMG_PROXY_HOSTS = ['fqnovelpic.com', 'byteimg.com', 'bytecdn.cn', 'toutiao.com', 'bytedance.com', 'ixigua.com'];
+
+function imgHostAllowed(host) {
+  const name = String(host || '').toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '');
+  return IMG_PROXY_HOSTS.some(suffix => name === suffix || name.endsWith('.' + suffix));
+}
+
 function safeImgUrl(u) {
-  const s = String(u||'');
+  let s = String(u || '').trim();
+  if (!s) return '';
+  // 章节 HTML 里的签名参数经常是 &amp;，直接拿去请求会破坏 x-signature。
+  s = s.replace(/&amp;/gi, '&').replace(/&#38;/g, '&');
+  if (s.startsWith('//')) s = 'https:' + s;
+  else if (/^(novel-pic\/|novel-pic-r\/|tos-cn-)/i.test(s)) {
+    s = 'https://p3-novel.byteimg.com/origin/' + s.replace(/^\//, '');
+  }
   if (!/^https?:\/\//i.test(s)) return '';
   try {
-    const host = new URL(s).host;
-    if (host.includes('fqnovelpic.com') || host.includes('byteimg.com') || host.includes('bytecdn.cn')) {
+    const url = new URL(s);
+    if (url.username || url.password) return '';
+    if (url.protocol === 'http:' && imgHostAllowed(url.hostname)) url.protocol = 'https:';
+    s = url.toString();
+    if (imgHostAllowed(url.hostname)) {
       return escapeAttr(`${API}/api/img_proxy?url=${encodeURIComponent(s)}`);
     }
-  } catch(e) {}
+  } catch (e) {}
   return escapeAttr(s);
 }
 function fetchWithTimeout(url, opts = {}, ms = 15000) {

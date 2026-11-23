@@ -1,17 +1,93 @@
 // ====== Shared reader helpers ======
-function renderParas(paras, authorSpeak) {
+function isIllustrationParagraph(text) {
+  return /^\s*<img\b/i.test(String(text || ''));
+}
+
+function _imgAttr(blob, name) {
+  const re = new RegExp('\\b' + name + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s"\'>]+))', 'i');
+  const m = String(blob || '').match(re);
+  return m ? (m[1] || m[2] || m[3] || '') : '';
+}
+
+function illustrationHtml(text) {
   let html = '';
-  for (let pi = 0; pi < paras.length; pi++) {
-    const text = paras[pi];
-    if (!text) continue;
-    const imgMatch = text.match(/^https?:\/\/\S+\.(jpg|jpeg|png|webp|gif)(\?\S*)?$/i);
-    if (imgMatch) { html += `<img class="content-img" src="${safeImgUrl(text)}">`; continue; }
-    const innerImgs = text.match(/<img[^>]+src="([^"]+)"[^>]*>/gi);
-    if (innerImgs) { innerImgs.forEach(imgTag => { const src = imgTag.match(/src="([^"]+)"/); if (src) html += `<img class="content-img" src="${safeImgUrl(src[1])}">`; }); continue; }
-    html += `<div class="para-wrap" data-para-idx="${pi}"><p>${escapeHtml(text)}<span class="para-badge" data-para-idx="${pi}" onclick="event.stopPropagation();openParaComment(${pi})"></span></p></div>`;
+  const re = /<img\b([^>]*)>/gi;
+  let m;
+  while ((m = re.exec(String(text || '')))) {
+    const src = _imgAttr(m[1], 'src') || _imgAttr(m[1], 'data-src') || _imgAttr(m[1], 'data-original');
+    const safe = safeImgUrl(src);
+    if (safe) html += `<img class="content-img" src="${safe}" alt="插图" loading="lazy">`;
   }
-  if (authorSpeak) html += `<div class="author-speak"><i data-lucide="message-circle" width="14" height="14"></i> 作者说：${escapeHtml(authorSpeak)}</div>`;
+  if (!html) {
+    const bare = String(text || '').trim();
+    if (/^https?:\/\//i.test(bare)) {
+      const safe = safeImgUrl(bare);
+      if (safe) html += `<img class="content-img" src="${safe}" alt="插图" loading="lazy">`;
+    }
+  }
+  const cap = String(text || '').match(/<figcaption>([\s\S]*?)<\/figcaption>/i);
+  if (cap) {
+    const decoded = cap[1]
+      .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+      .replace(/&amp;/g, '&').trim();
+    if (decoded) html += `<p class="img-caption">${escapeHtml(decoded)}</p>`;
+  }
   return html;
+}
+
+function textParagraphHtml(text, paraIdx) {
+  return `<div class="para-wrap" data-para-idx="${paraIdx}"><p>${escapeHtml(text)}<span class="para-badge" data-para-idx="${paraIdx}" onclick="event.stopPropagation();openParaComment(${paraIdx})"></span></p></div>`;
+}
+
+function paragraphQuote(paras, paraIdx) {
+  let seen = 0;
+  const want = Number(paraIdx);
+  for (const raw of paras || []) {
+    if (!raw || isIllustrationParagraph(raw)) continue;
+    const plain = String(raw).replace(/<img\b[^>]*>/gi, '').replace(/<[^>]+>/g, '').trim();
+    if (!plain) continue;
+    if (seen === want) return plain;
+    seen++;
+  }
+  return '';
+}
+
+function renderParagraphChunks(paras, authorSpeak) {
+  const chunks = [];
+  let textIdx = 0;
+  for (let i = 0; i < paras.length; i++) {
+    const text = paras[i];
+    if (!text) continue;
+    if (isIllustrationParagraph(text)) {
+      const illus = illustrationHtml(text);
+      if (illus) chunks.push(illus);
+      continue;
+    }
+    if (/<img\b/i.test(text)) {
+      const pieces = String(text).split(/(<img\b[^>]*>)/gi);
+      let buf = '';
+      const flush = () => {
+        const plain = buf.replace(/<[^>]+>/g, '').trim();
+        if (plain) { chunks.push(textParagraphHtml(plain, textIdx)); textIdx++; }
+        buf = '';
+      };
+      for (const piece of pieces) {
+        if (/^<img\b/i.test(piece)) { flush(); const illus = illustrationHtml(piece); if (illus) chunks.push(illus); }
+        else buf += piece;
+      }
+      flush();
+      continue;
+    }
+    chunks.push(textParagraphHtml(text, textIdx));
+    textIdx++;
+  }
+  if (authorSpeak) chunks.push(`<div class="author-speak"><i data-lucide="message-circle" width="14" height="14"></i> 作者说：${escapeHtml(authorSpeak)}</div>`);
+  return chunks;
+}
+
+function renderParas(paras, authorSpeak) {
+  return renderParagraphChunks(paras, authorSpeak).join('');
 }
 
 function cycleFont() {
@@ -66,7 +142,7 @@ function renderScrollReader(app, bid, idx) {
   const total = d.chapters.length;
   const prevIdx = idx > 0 ? idx - 1 : -1;
   const nextIdx = idx < total - 1 ? idx + 1 : -1;
-  const wc = paras.reduce((s,p) => s + (p||'').length, 0);
+  const wc = paras.reduce((s, p) => s + (isIllustrationParagraph(p) ? 0 : String(p || '').replace(/<[^>]+>/g, '').length), 0);
   const readMin = Math.max(1, Math.round(wc / 400));
   const chapterTitle = d.chapters[idx].Name || `第${idx+1}章`;
 
@@ -377,19 +453,7 @@ function pgCalculatePages() {
   
   const paras = c.paragraphs;
   const authorSpeak = c.authorSpeak;
-  
-  // Build paragraph HTML array
-  const paraHtmls = [];
-  for (let pi = 0; pi < paras.length; pi++) {
-    const text = paras[pi];
-    if (!text) continue;
-    const imgMatch = text.match(/^https?:\/\/\S+\.(jpg|jpeg|png|webp|gif)(\?\S*)?$/i);
-    if (imgMatch) { paraHtmls.push(`<img class="content-img" src="${safeImgUrl(text)}">`); continue; }
-    const innerImgs = text.match(/<img[^>]+src="([^"]+)"[^>]*>/gi);
-    if (innerImgs) { innerImgs.forEach(imgTag => { const src = imgTag.match(/src="([^"]+)"/); if (src) paraHtmls.push(`<img class="content-img" src="${safeImgUrl(src[1])}">`); }); continue; }
-    paraHtmls.push(`<div class="para-wrap" data-para-idx="${pi}"><p>${escapeHtml(text)}<span class="para-badge" data-para-idx="${pi}" onclick="event.stopPropagation();openParaComment(${pi})"></span></p></div>`);
-  }
-  if (authorSpeak) paraHtmls.push(`<div class="author-speak"><i data-lucide="message-circle" width="14" height="14"></i> 作者说：${escapeHtml(authorSpeak)}</div>`);
+  const paraHtmls = renderParagraphChunks(paras, authorSpeak);
   
   // Use a real .page-page element as measurer to guarantee layout consistency.
   const measurer = document.createElement('div');
@@ -967,7 +1031,7 @@ function openParaComment(paraIdx) {
   if (!chapterId) return;
   const c = getContentCache(chapterId);
   if (!c) return;
-  const text = c.paragraphs[paraIdx] || '';
+  const text = paragraphQuote(c.paragraphs, paraIdx);
 
   // Show immediate feedback toast (comment API can be slow ~1-3s)
   showToast('段评加载中...');
