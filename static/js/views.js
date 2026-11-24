@@ -1,59 +1,72 @@
-// ====== Render: Home ======
-function renderHome(app) {
+// ====== Continue reading (local history, or the signed-in shelf's last book) ======
+function continueReadingHtml() {
   const data = loadData();
-  let html = '';
-  if (data.readingHistory) {
-    const rh = data.readingHistory;
-    const pct = rh.totalChapters > 0 ? Math.round((rh.chapterIdx+1)/rh.totalChapters*100) : 0;
+  const rh = data.readingHistory;
+  if (rh && rh.bookId) {
+    const pct = rh.totalChapters > 0 ? Math.round((rh.chapterIdx + 1) / rh.totalChapters * 100) : 0;
     const circumference = 2 * Math.PI * 22;
     const dashOffset = circumference * (1 - pct / 100);
-    html += `<div class="continue-card view" onclick="navigate('reader?book_id=${rh.bookId}&chapter_idx=${rh.chapterIdx}')">
+    return `<div class="continue-card view" onclick="navigate('reader?book_id=${rh.bookId}&chapter_idx=${rh.chapterIdx}')">
       <div class="info"><div class="label">继续阅读</div><div class="title">${escapeHtml(rh.name||'')}</div><div class="chapter">${escapeHtml(rh.chapterName||'')}</div></div>
       <div class="ring"><svg width="52" height="52"><circle class="ring-bg" cx="26" cy="26" r="22"/><circle class="ring-fg" cx="26" cy="26" r="22" stroke-dasharray="${circumference}" stroke-dashoffset="${dashOffset}"/></svg><div class="ring-text">${pct}%</div></div><i data-lucide="chevron-right" class="continue-chev" width="20" height="20"></i></div>`;
   }
-  // Discover content — always shown (bookshelf is on its own tab)
-  const genreTags = [
-    {name:'热门',icon:'🔥'},{name:'玄幻',icon:'🗡️'},{name:'都市',icon:'🏙️'},
-    {name:'言情',icon:'💕'},{name:'仙侠',icon:'🔮'},{name:'游戏',icon:'🎮'},
-    {name:'历史',icon:'🏰'},{name:'科幻',icon:'🔬'}
-  ];
-  const quickCats = [
-    {name:'都市小说',icon:'🏙️',q:'都市'},{name:'玄幻奇幻',icon:'🗡️',q:'玄幻'},
-    {name:'仙侠修真',icon:'🔮',q:'仙侠'},      {name:'历史军事',icon:'🏰',q:'历史'},
-    {name:'游戏竞技',icon:'🎮',q:'游戏'},{name:'科幻世界',icon:'🔬',q:'科幻'},
-    {name:'悬疑灵异',icon:'🕵️',q:'悬疑'},{name:'古代言情',icon:'💕',q:'言情'}
-  ];
-  html += `<div class="home-discover view">
-    <div class="discover-welcome">
-      <div class="welcome-emoji">📚</div>
-      <div class="welcome-title">发现好书</div>
-      <div class="welcome-desc">搜索书名或作者，找到你的下一本读物</div>
-    </div>
-    <div class="discover-section">
-      <div class="discover-section-title">热门分类</div>
-      <div class="discover-tags">${genreTags.map(t => `<span class="discover-tag" onclick="navigate('search?q=${encodeURIComponent(t.name)}')">${t.icon} ${t.name}</span>`).join('')}</div>
-    </div>
-    <div class="discover-section">
-      <div class="discover-section-title">探索发现</div>
-      <div class="discover-grid">${quickCats.map(c => `<div class="discover-card" onclick="navigate('search?q=${encodeURIComponent(c.q)}')"><div class="discover-card-icon">${c.icon}</div><div class="discover-card-name">${c.name}</div></div>`).join('')}</div>
-    </div>
-    <div class="discover-tip">
-      <div class="discover-tip-icon">💡</div>
-      <div class="discover-tip-text">搜索你喜欢的小说开始阅读</div>
-    </div>
-  </div>`;
-  app.innerHTML = html;
-  refreshIcons(app);
+  if (_profileUser && Array.isArray(_onlineShelf) && _onlineShelf.length) {
+    const recent = _onlineShelf.filter(b => b.LastReadTime > 0 && b.BookID).sort((a, b) => b.LastReadTime - a.LastReadTime)[0];
+    if (recent) {
+      return `<div class="continue-card view" onclick="navigate('detail?book_id=${recent.BookID}')">
+        <div class="info"><div class="label">继续阅读</div><div class="title">${escapeHtml(recent.Name||'')}</div><div class="chapter">${escapeHtml(recent.LastReadChapter||'从详情页继续')}</div></div>
+        <i data-lucide="chevron-right" class="continue-chev" width="20" height="20"></i></div>`;
+    }
+  }
+  return '';
 }
 
 // ====== Render: Search results ======
+function bookCardHtml(book) {
+  if (!book) return '';
+  const id = String(book.BookID || '');
+  const open = /^[0-9A-Za-z_-]{1,40}$/.test(id) ? ` onclick="navigate('detail?book_id=${id}')"` : '';
+  const tags = bookTags(book);
+  const status = book.Status || '';
+  const wc = book.WordCount ? (book.WordCount / 10000).toFixed(1) + '万字' : '';
+  const score = parseFloat(book.Score);
+  const stars = score > 0 ? '<i data-lucide="star" width="12" height="12" style="vertical-align:-1px"></i>' + (score > 10 ? (score / 10).toFixed(1) : score.toFixed(1)) : '';
+  return `<div class="book-card"${open}>
+      <img class="book-cover" src="${safeImgUrl(book.ThumbUrl)||FALLBACK_IMG}" loading="lazy" onerror="coverFallback(this)">
+      <div class="book-info">
+        <div class="book-title">${escapeHtml(book.Name||'')}${status?`<span class="status-badge ${status==='连载中'?'ongoing':'finished'}">${status}</span>`:''}</div>
+        <div class="book-author">${escapeHtml(book.Author||'')} ${stars?'· '+stars:''}</div>
+        <div class="book-desc">${escapeHtml(book.Desc||'')}</div>
+        <div class="book-meta">${[book.ChapterCount?book.ChapterCount+'章':'', wc, ...tags.map(t=>`<span class="tag-pill">${escapeHtml(t)}</span>`)].filter(Boolean).join(' · ')}</div>
+      </div></div>`;
+}
+
+function renderSearchEmpty(app) {
+  app = app || $('app');
+  const key = S.key || '';
+  const failed = S.error || '';
+  const title = failed ? '搜索失败' : (key ? '没有找到相关书籍' : '输入书名或作者后再搜索');
+  const desc = failed
+    ? failed
+    : (key ? `没有和「${escapeHtml(key)}」匹配的小说。可以换个词，或回书城按分类看。` : '书城可以按分类浏览，搜索留到你知道书名的时候再用。');
+  const action = failed
+    ? `<button class="shelf-empty-cta" type="button" onclick="doSearch()">重试</button>`
+    : `<button class="shelf-empty-cta" type="button" onclick="navigate('discover')">返回书城</button>`;
+  app.innerHTML = `<div class="store-fallback view">
+    <div class="welcome-emoji">🔍</div>
+    <div class="title">${escapeHtml(title)}</div>
+    <div class="desc">${failed ? escapeHtml(desc) : desc}</div>
+    ${action}
+  </div>`;
+}
+
 function renderResults(app) {
   app = app || $('app');
   const td = getTabData();
-  if (td.books.length === 0 && !S.loading) { renderHome(app); return; }
+  if (td.books.length === 0 && !S.loading) { renderSearchEmpty(app); return; }
   if (td.books.length === 0 && S.loading) { app.innerHTML = skeletonResults(5); return; }
   const display = td.filtered.length > 0 ? td.filtered : td.books;
-  const allTags = [...new Set(td.books.flatMap(b => (b.Tags||'').split(',').map(t=>t.trim()).filter(Boolean)))];
+  const allTags = [...new Set(td.books.flatMap(bookTags))];
   let html = `<div class="search-controls view"><span class="search-result-info">${td.books.length} 条</span>`;
   if (td.filtered.length !== td.books.length) html += `<span class="search-result-info">· 筛选 ${td.filtered.length}</span>`;
   for (const s of [{key:'default',label:'默认'},{key:'read',label:'热度'},{key:'words',label:'字数'},{key:'chapters',label:'章节'}]) {
@@ -66,21 +79,7 @@ function renderResults(app) {
     html += '</div>';
   }
   html += '<div class="book-list view">';
-  for (const book of display) {
-    const tags = (book.Tags||'').split(',').map(t=>t.trim()).filter(Boolean);
-    const status = book.Status||'';
-    const wc = book.WordCount ? (book.WordCount/10000).toFixed(1)+'万字' : '';
-    const score = parseFloat(book.Score);
-    const stars = score > 0 ? '<i data-lucide="star" width="12" height="12" style="vertical-align:-1px"></i>'+(score > 10 ? (score/10).toFixed(1) : score.toFixed(1)) : '';
-    html += `<div class="book-card" onclick="navigate('detail?book_id=${book.BookID}')">
-      <img class="book-cover" src="${safeImgUrl(book.ThumbUrl)||FALLBACK_IMG}" loading="lazy" onerror="this.src='${FALLBACK_IMG}'">
-      <div class="book-info">
-        <div class="book-title">${escapeHtml(book.Name||'')}${status?`<span class="status-badge ${status==='连载中'?'ongoing':'finished'}">${status}</span>`:''}</div>
-        <div class="book-author">${escapeHtml(book.Author||'')} ${stars?'· '+stars:''}</div>
-        <div class="book-desc">${escapeHtml(book.Desc||'')}</div>
-        <div class="book-meta">${[book.ChapterCount?book.ChapterCount+'章':'', wc, ...tags.map(t=>`<span class="tag-pill">${escapeHtml(t)}</span>`)].filter(Boolean).join(' · ')}</div>
-      </div></div>`;
-  }
+  for (const book of display) html += bookCardHtml(book);
   html += '</div>';
   if (td.books.length > 0) html += `<div class="load-more view"><button onclick="loadMore()" ${S.loading?'disabled':''}>${S.loading?'加载中...':td.hasMore?'加载更多':'没有更多了'}</button></div>`;
   app.innerHTML = html;
@@ -105,7 +104,7 @@ function renderShelf(app, filter) {
   } else {
     $('pageTitle').textContent = `我的书架 · ${data.shelf.length} 本`;
     const shelf = data.shelf;
-    if (!shelf.length) html += '<div class="shelf-empty"><div class="icon"><i data-lucide="book-open" width="48" height="48"></i></div><div>还没有收藏的书籍<br><span style="font-size:12px">在书籍详情页点击收藏即可加入书架</span></div><button class="shelf-empty-cta" onclick="navigate(\'search\')">去书城逛逛</button></div>';
+    if (!shelf.length) html += '<div class="shelf-empty"><div class="icon"><i data-lucide="book-open" width="48" height="48"></i></div><div>还没有收藏的书籍<br><span style="font-size:12px">在书籍详情页点击收藏即可加入书架</span></div><button class="shelf-empty-cta" type="button" onclick="navigate(\'discover\')">去书城逛逛</button></div>';
     else {
       html += _renderLocalShelf(shelf, rh);
     }
@@ -405,18 +404,18 @@ function _renderLocalShelf(shelf, rh) {
       const b = item.data;
       const sp = rh && rh.bookId === b.bookId && rh.totalChapters > 0 ? Math.round((rh.chapterIdx+1)/rh.totalChapters*100) : 0;
       const badgeHtml = _localBadge(b.bookId);
-      html += `<div class="shelf-grid-item" onclick="navigate('detail?book_id=${b.bookId}')" data-book-id="${b.bookId}" data-name="${escapeHtml(b.name||'')}"><div class="cover-wrap">${badgeHtml}<img src="${b.thumb||FALLBACK_IMG}" loading="lazy" onerror="this.src='${FALLBACK_IMG}'"></div><div class="name">${escapeHtml(b.name||'')}</div>${sp?`<div class="progress-text">读到第${rh.chapterIdx+1}章 · ${sp}%</div>`:'<div class="progress-text">&nbsp;</div>'}</div>`;
+      html += `<div class="shelf-grid-item" onclick="navigate('detail?book_id=${b.bookId}')" data-book-id="${b.bookId}" data-name="${escapeHtml(b.name||'')}"><div class="cover-wrap">${badgeHtml}<img src="${b.thumb||FALLBACK_IMG}" loading="lazy" onerror="coverFallback(this)"></div><div class="name">${escapeHtml(b.name||'')}</div>${sp?`<div class="progress-text">读到第${rh.chapterIdx+1}章 · ${sp}%</div>`:'<div class="progress-text">&nbsp;</div>'}</div>`;
     } else {
       const gid = item.gid, g = item.g;
       const previews = g.books.slice(0, 4);
       let coverInner = '';
       if (previews.length === 1) {
-        coverInner = `<img src="${previews[0].thumb||FALLBACK_IMG}" loading="lazy" onerror="this.src='${FALLBACK_IMG}'">`;
+        coverInner = `<img src="${previews[0].thumb||FALLBACK_IMG}" loading="lazy" onerror="coverFallback(this)">`;
       } else {
         coverInner = '<div class="folder-cover-grid">';
         for (let i = 0; i < 4; i++) {
           if (previews[i]) {
-            coverInner += `<img src="${previews[i].thumb||FALLBACK_IMG}" loading="lazy" onerror="this.src='${FALLBACK_IMG}'">`;
+            coverInner += `<img src="${previews[i].thumb||FALLBACK_IMG}" loading="lazy" onerror="coverFallback(this)">`;
           } else {
             coverInner += '<div class="folder-cover-empty"></div>';
           }
@@ -442,7 +441,7 @@ function _openLocalFolder(gid) {
   for (const b of g.books) {
     const rh = loadData().readingHistory;
     const sp = rh && rh.bookId === b.bookId && rh.totalChapters > 0 ? Math.round((rh.chapterIdx+1)/rh.totalChapters*100) : 0;
-    booksHtml += `<div class="shelf-grid-item" onclick="closeShelfFolder();navigate('detail?book_id=${b.bookId}')" data-name="${escapeHtml(b.name||'')}"><div class="cover-wrap"><img src="${b.thumb||FALLBACK_IMG}" loading="lazy" onerror="this.src='${FALLBACK_IMG}'"></div><div class="name">${escapeHtml(b.name||'')}</div>${sp?`<div class="progress-text">读到第${rh.chapterIdx+1}章 · ${sp}%</div>`:'<div class="progress-text">&nbsp;</div>'}</div>`;
+    booksHtml += `<div class="shelf-grid-item" onclick="closeShelfFolder();navigate('detail?book_id=${b.bookId}')" data-name="${escapeHtml(b.name||'')}"><div class="cover-wrap"><img src="${b.thumb||FALLBACK_IMG}" loading="lazy" onerror="coverFallback(this)"></div><div class="name">${escapeHtml(b.name||'')}</div>${sp?`<div class="progress-text">读到第${rh.chapterIdx+1}章 · ${sp}%</div>`:'<div class="progress-text">&nbsp;</div>'}</div>`;
   }
   const overlay = document.createElement('div');
   overlay.className = 'shelf-folder-overlay';
@@ -466,7 +465,7 @@ function _openLocalFolder(gid) {
 
 function _renderCloudShelf(rh) {
   if (_onlineShelfLoading) return '<div class="loading" style="padding:20px">加载中...</div>';
-  if (!_onlineShelf.length) return '<div class="shelf-empty"><div class="icon"><i data-lucide="cloud" width="32" height="32"></i></div><div>在线书架为空</div></div>';
+  if (!_onlineShelf.length) return '<div class="shelf-empty"><div class="icon"><i data-lucide="cloud" width="32" height="32"></i></div><div>在线书架为空</div><button class="shelf-empty-cta" type="button" onclick="navigate(\'discover\')">去书城逛逛</button></div>';
   let html = '';
   const groups = new Map();
   const ungrouped = [];
@@ -495,18 +494,18 @@ function _renderCloudShelf(rh) {
     if (item.type === 'book') {
       const b = item.data;
       const progressHtml = `<div class="progress-text">${b.LastReadChapter ? escapeHtml(b.LastReadChapter) : '&nbsp;'}</div>`;
-      html += `<div class="shelf-grid-item" onclick="navigate('detail?book_id=${b.BookID}')" data-book-id="${b.BookID}" data-name="${escapeHtml(b.Name||'')}"><div class="cover-wrap">${bookBadge(b)}<img src="${safeImgUrl(b.ThumbUrl)||FALLBACK_IMG}" loading="lazy" onerror="this.src='${FALLBACK_IMG}'"></div><div class="name">${escapeHtml(b.Name||'')}</div>${progressHtml}</div>`;
+      html += `<div class="shelf-grid-item" onclick="navigate('detail?book_id=${b.BookID}')" data-book-id="${b.BookID}" data-name="${escapeHtml(b.Name||'')}"><div class="cover-wrap">${bookBadge(b)}<img src="${safeImgUrl(b.ThumbUrl)||FALLBACK_IMG}" loading="lazy" onerror="coverFallback(this)"></div><div class="name">${escapeHtml(b.Name||'')}</div>${progressHtml}</div>`;
     } else {
       const gid = item.gid, g = item.g;
       const previews = g.books.slice(0, 4);
       let coverInner = '';
       if (previews.length === 1) {
-        coverInner = `<img src="${safeImgUrl(previews[0].ThumbUrl)||FALLBACK_IMG}" loading="lazy" onerror="this.src='${FALLBACK_IMG}'">`;
+        coverInner = `<img src="${safeImgUrl(previews[0].ThumbUrl)||FALLBACK_IMG}" loading="lazy" onerror="coverFallback(this)">`;
       } else {
         coverInner = '<div class="folder-cover-grid">';
         for (let i = 0; i < 4; i++) {
           if (previews[i]) {
-            coverInner += `<img src="${safeImgUrl(previews[i].ThumbUrl)||FALLBACK_IMG}" loading="lazy" onerror="this.src='${FALLBACK_IMG}'">`;
+            coverInner += `<img src="${safeImgUrl(previews[i].ThumbUrl)||FALLBACK_IMG}" loading="lazy" onerror="coverFallback(this)">`;
           } else {
             coverInner += '<div class="folder-cover-empty"></div>';
           }
@@ -725,7 +724,7 @@ function openShelfFolder(gid) {
   let booksHtml = '';
   for (const b of g.books) {
     const progressHtml = `<div class="progress-text">${b.LastReadChapter ? escapeHtml(b.LastReadChapter) : '&nbsp;'}</div>`;
-    booksHtml += `<div class="shelf-grid-item" onclick="closeShelfFolder();navigate('detail?book_id=${b.BookID}')" data-book-id="${b.BookID}" data-name="${escapeHtml(b.Name||'')}"><div class="cover-wrap">${bookBadge(b)}<img src="${safeImgUrl(b.ThumbUrl)||FALLBACK_IMG}" loading="lazy" onerror="this.src='${FALLBACK_IMG}'"></div><div class="name">${escapeHtml(b.Name||'')}</div>${progressHtml}</div>`;
+    booksHtml += `<div class="shelf-grid-item" onclick="closeShelfFolder();navigate('detail?book_id=${b.BookID}')" data-book-id="${b.BookID}" data-name="${escapeHtml(b.Name||'')}"><div class="cover-wrap">${bookBadge(b)}<img src="${safeImgUrl(b.ThumbUrl)||FALLBACK_IMG}" loading="lazy" onerror="coverFallback(this)"></div><div class="name">${escapeHtml(b.Name||'')}</div>${progressHtml}</div>`;
   }
   const overlay = document.createElement('div');
   overlay.className = 'shelf-folder-overlay';
@@ -1068,18 +1067,18 @@ function renderDetail(app, bid) {
       coverHtml = `<div class="cover-flip" id="coverFlip" onclick="this.classList.toggle('flipped');event.stopPropagation()">
         <div class="cover-flip-inner">
           <div class="cover-flip-front">
-            <img src="${safeImgUrl(cover)||FALLBACK_IMG}" onerror="this.src='${FALLBACK_IMG}'">
+            <img src="${safeImgUrl(cover)||FALLBACK_IMG}" onerror="coverFallback(this)">
             <span class="cover-flip-badge">推广</span>
           </div>
           <div class="cover-flip-back">
-            <img id="originalCoverImg" src="${safeImgUrl(detail.original_thumb_url)||safeImgUrl(cover)||FALLBACK_IMG}" onerror="this.src='${FALLBACK_IMG}'">
+            <img id="originalCoverImg" src="${safeImgUrl(detail.original_thumb_url)||safeImgUrl(cover)||FALLBACK_IMG}" onerror="coverFallback(this)">
             <span class="cover-flip-badge">原始</span>
           </div>
         </div>
         <span class="cover-flip-hint">⇄</span>
       </div>`;
     } else {
-      coverHtml = `<img class="book-detail-cover" src="${safeImgUrl(cover)||FALLBACK_IMG}" onerror="this.src='${FALLBACK_IMG}'">`;
+      coverHtml = `<img class="book-detail-cover" src="${safeImgUrl(cover)||FALLBACK_IMG}" onerror="coverFallback(this)">`;
     }
     html += `<div class="book-detail-header">
       ${coverHtml}
@@ -1152,7 +1151,7 @@ async function fetchAuthorBooks(author, currentBid, authorId) {
       if (section) section.style.display = 'none';
       return;
     }
-    scroll.innerHTML = others.map(b => `<div class="related-item" onclick="navigate('detail?book_id=${b.BookID}')"><img src="${safeImgUrl(b.ThumbUrl)||FALLBACK_IMG}" loading="lazy" onerror="this.src='${FALLBACK_IMG}'"><div class="name">${escapeHtml(b.Name||'')}</div>${b.ShortName?`<div class="related-short-name">${escapeHtml(b.ShortName)}</div>`:''}</div>`).join('');
+    scroll.innerHTML = others.map(b => `<div class="related-item" onclick="navigate('detail?book_id=${b.BookID}')"><img src="${safeImgUrl(b.ThumbUrl)||FALLBACK_IMG}" loading="lazy" onerror="coverFallback(this)"><div class="name">${escapeHtml(b.Name||'')}</div>${b.ShortName?`<div class="related-short-name">${escapeHtml(b.ShortName)}</div>`:''}</div>`).join('');
   } catch(e) {
     scroll.innerHTML = '<div style="padding:12px 0;color:var(--text-muted);font-size:13px">加载失败</div>';
   }
@@ -1262,7 +1261,7 @@ async function renderAuthorPage(app, authorId, authorName) {
       const stars = score > 0 ? '<i data-lucide="star" width="12" height="12" style="vertical-align:-1px"></i>'+(score > 10 ? (score/10).toFixed(1) : score.toFixed(1)) : '';
       const readText = book.ReadCountText || (book.ReadCount ? book.ReadCount+'人在读' : '');
       return `<div class="book-card" onclick="navigate('detail?book_id=${book.BookID}')">
-        <img class="book-cover" src="${safeImgUrl(book.ThumbUrl)||FALLBACK_IMG}" loading="lazy" onerror="this.src='${FALLBACK_IMG}'">
+        <img class="book-cover" src="${safeImgUrl(book.ThumbUrl)||FALLBACK_IMG}" loading="lazy" onerror="coverFallback(this)">
         <div class="book-info">
           <div class="book-title">${escapeHtml(book.Name||'')}${status?`<span class="status-badge ${status==='连载中'?'ongoing':'finished'}">${status}</span>`:''}</div>
           ${book.ShortName?`<div class="book-short-name">又名：${escapeHtml(book.ShortName)}</div>`:''}
@@ -1384,6 +1383,346 @@ function renderCommentItems(list) {
   }
   return html;
 }
+// ====== Bookstore (Discover) ======
+const _frontCache = {};
+const _catIndex = {};
+let _discoverReq = 0;
+let _dirReq = 0;
+let _bgAbort = new AbortController();
+function backgroundSignal() { return _bgAbort.signal; }
+function abortDiscoverLoads() {
+  _bgAbort.abort();
+  _bgAbort = new AbortController();
+}
+let _catReq = 0;
+let C = { sig: '', books: [], offset: 0, hasMore: false, loading: false, error: '', empty: false };
+
+function _rememberCategories(front) {
+  if (!front) return;
+  const walk = (category) => {
+    if (!category) return;
+    if (category.id) _catIndex[category.id] = category;
+    (category.children || []).forEach(walk);
+  };
+  (front.hot_categories || []).forEach(walk);
+  (front.categories || []).forEach(walk);
+  (front.sections || []).forEach(section => (section.categories || []).forEach(walk));
+}
+
+function _validId(id) { return /^[0-9A-Za-z_-]{1,32}$/.test(String(id || '')); }
+
+function categoryChip(category) {
+  if (!category || !_validId(category.id)) return '';
+  const count = category.book_count ? ` title="${escapeAttr(category.book_count + ' 本')}"` : '';
+  return `<button type="button" class="discover-tag" data-cat-id="${escapeAttr(category.id)}" data-cat-name="${escapeAttr(category.name || '')}"${count}>${escapeHtml(category.name || '')}</button>`;
+}
+
+function selectDiscoverTab(tabType) {
+  const tab = String(tabType ?? '');
+  if (tab && !/^-?\d{1,3}$/.test(tab)) return;
+  discoverTab = tab;
+  navigate(tab ? `discover?tab=${encodeURIComponent(tab)}` : 'discover');
+}
+
+function openCategory(id, name) {
+  if (!_validId(id)) return;
+  const params = new URLSearchParams();
+  params.set('id', id);
+  if (name) params.set('name', name);
+  navigate('category?' + params.toString());
+}
+
+function activeDiscoverTab(front, queryTab) {
+  if (queryTab !== undefined && queryTab !== null && queryTab !== '') return String(queryTab);
+  if (front && front.active_tab !== null && front.active_tab !== undefined && front.active_tab !== '') return String(front.active_tab);
+  if (front && front.default_tab !== null && front.default_tab !== undefined && front.default_tab !== '') return String(front.default_tab);
+  return front && front.tabs && front.tabs[0] ? String(front.tabs[0].tab_type) : '';
+}
+
+function storeFallbackHtml(title, desc, retry) {
+  const action = retry
+    ? `<button class="shelf-empty-cta" type="button" onclick="renderDiscover($('app'), currentDiscoverQuery())">重试</button>`
+    : `<button class="shelf-empty-cta" type="button" onclick="navigate('discover')">返回书城</button>`;
+  return `<div class="store-fallback view"><div class="welcome-emoji">📚</div><div class="title">${escapeHtml(title)}</div><div class="desc">${escapeHtml(desc)}</div>${action}</div>`;
+}
+
+function currentDiscoverQuery() {
+  const hash = location.hash.slice(1) || '';
+  const [path, qs] = hash.split('?');
+  const query = {};
+  if (path === 'discover' && qs) new URLSearchParams(qs).forEach((v, k) => query[k] = v);
+  return query;
+}
+
+function bookRailHtml(books) {
+  const items = (books || []).slice(0, 18).map(book => {
+    if (!_validId(book.BookID)) return '';
+    return `<div class="book-rail-item" onclick="navigate('detail?book_id=${book.BookID}')">
+      <img src="${safeImgUrl(book.ThumbUrl)||FALLBACK_IMG}" loading="lazy" alt="" onerror="coverFallback(this)">
+      <div class="name">${escapeHtml(book.Name || '')}</div>
+      <div class="author">${escapeHtml(book.Author || '')}</div>
+    </div>`;
+  }).join('');
+  return items ? `<div class="book-rail">${items}</div>` : '';
+}
+
+function bookstoreHtml(front, queryTab) {
+  const tab = activeDiscoverTab(front, queryTab);
+  let html = '<div class="home-discover view">';
+  if (front.tabs && front.tabs.length) {
+    html += `<div class="store-tabs">${front.tabs.map(item => {
+      const type = String(item.tab_type);
+      const on = type === tab ? ' active' : '';
+      return `<button type="button" class="store-tab${on}" data-discover-tab="${escapeAttr(type)}">${escapeHtml(item.tab_name || '')}</button>`;
+    }).join('')}</div>`;
+  }
+  const hot = front.hot_categories || [];
+  html += `<div class="discover-section"><div class="store-head"><div class="discover-section-title">热门分类</div><button type="button" class="store-more" onclick="navigate('categories')">全部分类</button></div>`;
+  html += hot.length
+    ? `<div class="discover-tags">${hot.map(categoryChip).join('')}</div>`
+    : '<div class="store-muted">暂时没有热门分类</div>';
+  html += '</div>';
+  const sections = front.sections || [];
+  if (!sections.length) {
+    html += '<div class="store-muted">这个频道暂时没有书单，可以先从分类里挑。</div>';
+  }
+  for (const section of sections) {
+    const chips = (section.categories || []).map(categoryChip).join('');
+    const rail = bookRailHtml(section.books || []);
+    if (!chips && !rail) continue;
+    html += `<div class="discover-section"><div class="discover-section-title">${escapeHtml(section.title || '书单')}</div>`;
+    if (chips) html += `<div class="discover-tags">${chips}</div>`;
+    if (rail) html += rail;
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+async function fetchFront(tab) {
+  const key = tab ? String(tab) : '';
+  if (_frontCache[key]) return { code: 200, data: _frontCache[key] };
+  const params = new URLSearchParams();
+  params.set('needHot', '1');
+  if (key) params.set('categoryTab', key);
+  const response = await fetchWithTimeout(`${API}/api/discover/front?${params.toString()}`, { signal: backgroundSignal() }, 20000);
+  const data = await response.json();
+  if (response.ok && data.code === 200 && data.data) {
+    _frontCache[key] = data.data;
+    _rememberCategories(data.data);
+    if (!key && data.data.active_tab !== null && data.data.active_tab !== undefined) {
+      _frontCache[String(data.data.active_tab)] = data.data;
+    }
+  }
+  return data;
+}
+
+async function renderDiscover(app, query) {
+  const req = ++_discoverReq;
+  const tab = query && query.tab ? String(query.tab) : '';
+  discoverTab = tab;
+  const cached = _frontCache[tab];
+  if (!cached) app.innerHTML = continueReadingHtml() + skeletonBookstore();
+  refreshIcons(app);
+  try {
+    let data = await fetchFront(tab);
+    if (req !== _discoverReq || routePath() !== 'discover') return;
+    if (!data || data.code !== 200 || !data.data) {
+      app.innerHTML = continueReadingHtml() + storeFallbackHtml('书城暂时打不开', (data && data.msg) || '分类数据需要 unidbg 签名服务。请确认服务已启动后重试。顶部搜索仍然可以查书名。', true);
+      refreshIcons(app);
+      return;
+    }
+    let front = data.data;
+    const active = activeDiscoverTab(front, tab);
+    if (!(front.sections || []).length && active !== '') {
+      const cell = await fetchCell(active);
+      if (req !== _discoverReq || routePath() !== 'discover') return;
+      if (cell && cell.code === 200 && cell.data && (cell.data.sections || []).length) {
+        front = Object.assign({}, front, { sections: cell.data.sections });
+        _frontCache[tab] = front;
+        if (active) _frontCache[String(active)] = front;
+        _rememberCategories(front);
+      }
+    }
+    if (req !== _discoverReq || routePath() !== 'discover') return;
+    if (!tab && active !== '' && active != null) discoverTab = String(active);
+    app.innerHTML = continueReadingHtml() + bookstoreHtml(front, tab || active);
+  } catch (e) {
+    if (req !== _discoverReq || routePath() !== 'discover' || (e && e.name === 'AbortError')) return;
+    app.innerHTML = continueReadingHtml() + storeFallbackHtml('书城暂时打不开', '分类数据需要 unidbg 签名服务。请确认服务已启动后重试。顶部搜索仍然可以查书名。', true);
+  }
+  refreshIcons(app);
+}
+
+async function fetchCell(tab) {
+  const params = new URLSearchParams();
+  params.set('newCategoryTab', String(tab));
+  const response = await fetchWithTimeout(`${API}/api/discover/cell?${params.toString()}`, { signal: backgroundSignal() }, 20000);
+  return response.json();
+}
+
+function directoryHtml(front) {
+  const groups = (front.categories || []).length ? front.categories : (front.hot_categories || []);
+  if (!groups.length) {
+    return storeFallbackHtml('暂时没有分类', '分类列表还没返回。可以稍后重试，或直接搜索书名。', false);
+  }
+  const grouped = groups.filter(item => (item.children || []).length);
+  const leaves = groups.filter(item => !(item.children || []).length);
+  let html = '<div class="home-discover view">';
+  if ((front.hot_categories || []).length && (front.categories || []).length) {
+    html += `<div class="discover-section"><div class="discover-section-title">热门分类</div><div class="discover-tags">${front.hot_categories.map(categoryChip).join('')}</div></div>`;
+  }
+  for (const group of grouped) {
+    const heading = _validId(group.id)
+      ? `<button type="button" class="store-more" data-cat-id="${escapeAttr(group.id)}" data-cat-name="${escapeAttr(group.name || '')}">${escapeHtml(group.name || '')}</button>`
+      : escapeHtml(group.name || '分类');
+    html += `<div class="discover-section cat-group"><div class="store-head"><div class="discover-section-title">${heading}</div></div><div class="discover-tags">${group.children.map(categoryChip).join('')}</div></div>`;
+  }
+  if (leaves.length) {
+    html += `<div class="discover-section"><div class="discover-section-title">${grouped.length ? '更多分类' : '全部分类'}</div><div class="discover-tags">${leaves.map(categoryChip).join('')}</div></div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+async function renderAllCategories(app) {
+  const req = ++_dirReq;
+  app.innerHTML = skeletonBookstore();
+  try {
+    const data = await fetchFront(discoverTab || '');
+    if (req !== _dirReq || routePath() !== 'categories') return;
+    if (!data || data.code !== 200 || !data.data) {
+      app.innerHTML = storeFallbackHtml('分类列表打不开', (data && data.msg) || '分类数据需要 unidbg 签名服务。', false);
+      return;
+    }
+    app.innerHTML = directoryHtml(data.data);
+  } catch (e) {
+    if (req !== _dirReq || routePath() !== 'categories' || (e && e.name === 'AbortError')) return;
+    app.innerHTML = storeFallbackHtml('分类列表打不开', '分类数据需要 unidbg 签名服务。', false);
+  }
+}
+
+function currentCategoryQuery() {
+  const hash = location.hash.slice(1) || '';
+  const [path, qs] = hash.split('?');
+  const query = { id: '', name: '', sub: '', sort: 'hot', status: '', words: '' };
+  if (path === 'category' && qs) new URLSearchParams(qs).forEach((v, k) => query[k] = v);
+  if (!query.sort) query.sort = 'hot';
+  return query;
+}
+
+function categorySig(query) {
+  return [query.id, query.sub || '', query.sort || 'hot', query.status || '', query.words || ''].join('|');
+}
+
+function setCategoryFilter(key, value) {
+  const query = currentCategoryQuery();
+  if (!_validId(query.id)) return;
+  if ((key === 'status' || key === 'words' || key === 'sub') && (query[key] || '') === value) value = '';
+  if (key === 'sub' && value && !_validId(value)) return;
+  if (key === 'sort' || key === 'status' || key === 'words' || key === 'sub') query[key] = value;
+  const params = new URLSearchParams();
+  params.set('id', query.id);
+  if (query.name) params.set('name', query.name);
+  if (query.sub) params.set('sub', query.sub);
+  if (query.sort) params.set('sort', query.sort);
+  if (query.status) params.set('status', query.status);
+  if (query.words) params.set('words', query.words);
+  navigate('category?' + params.toString());
+}
+
+function categoryFilterHtml(query) {
+  const sorts = [{ key: 'hot', label: '热门' }, { key: 'new', label: '最新' }, { key: 'overall', label: '综合' }];
+  const statuses = [{ key: '', label: '全部' }, { key: 'serial', label: '连载' }, { key: 'finish', label: '完结' }];
+  const words = [{ key: '', label: '不限字数' }, { key: '0-30w', label: '30万以下' }, { key: '30w-50w', label: '30-50万' }, { key: '50w+', label: '50万以上' }];
+  const chip = (kind, item, current) => `<button type="button" class="sort-btn${current === item.key ? ' active' : ''}" data-cat-filter="${kind}" data-cat-value="${escapeAttr(item.key)}">${item.label}</button>`;
+  let html = `<div class="search-controls view">${sorts.map(item => chip('sort', item, query.sort || 'hot')).join('')}</div>`;
+  html += `<div class="search-controls view">${statuses.map(item => chip('status', item, query.status || '')).join('')}</div>`;
+  html += `<div class="search-controls view">${words.map(item => chip('words', item, query.words || '')).join('')}</div>`;
+  const node = _catIndex[query.id];
+  const subs = node && node.children ? node.children.filter(item => _validId(item.id)) : [];
+  if (subs.length) {
+    html += `<div class="discover-tags view"><button type="button" class="discover-tag${query.sub ? '' : ' active'}" data-cat-filter="sub" data-cat-value="">全部</button>${subs.map(item => `<button type="button" class="discover-tag${query.sub === item.id ? ' active' : ''}" data-cat-filter="sub" data-cat-value="${escapeAttr(item.id)}">${escapeHtml(item.name || '')}</button>`).join('')}</div>`;
+  }
+  return html;
+}
+
+function paintCategory(app, query) {
+  $('pageTitle').textContent = query.name || (_catIndex[query.id] && _catIndex[query.id].name) || '分类';
+  let html = categoryFilterHtml(query);
+  if (C.loading && !C.books.length) html += skeletonResults(4);
+  else if (C.error) html += storeFallbackHtml('分类加载失败', C.error, false).replace('返回书城', '返回书城');
+  else if (!C.books.length) html += '<div class="store-fallback view"><div class="welcome-emoji">📭</div><div class="title">这个分类下暂时没有书</div><div class="desc">换个筛选条件，或看看其他分类。</div></div>';
+  else {
+    html += `<div class="book-list view">${C.books.map(bookCardHtml).join('')}</div>`;
+    html += `<div class="load-more view"><button type="button" onclick="loadMoreCategory()" ${C.loading || !C.hasMore ? 'disabled' : ''}>${C.loading ? '加载中...' : C.hasMore ? '加载更多' : '没有更多了'}</button></div>`;
+  }
+  app.innerHTML = html;
+  refreshIcons(app);
+}
+
+async function renderCategory(app, query) {
+  const id = query.id || '';
+  if (!_validId(id)) {
+    app.innerHTML = storeFallbackHtml('分类无效', '请从书城重新选择一个分类。', false);
+    return;
+  }
+  const sig = categorySig(query);
+  if (C.sig === sig && !C.loading && (C.books.length || C.error || C.empty)) {
+    paintCategory(app, query);
+    return;
+  }
+  C = { sig, books: [], offset: 0, hasMore: false, loading: true, error: '', empty: false };
+  paintCategory(app, query);
+  await fetchCategoryPage(query, true);
+}
+
+async function fetchCategoryPage(query, replace) {
+  const req = ++_catReq;
+  const sig = categorySig(query);
+  const params = new URLSearchParams();
+  params.set('categoryId', query.id);
+  params.set('offset', String(replace ? 0 : C.offset || 0));
+  params.set('limit', '20');
+  params.set('sortBy', query.sort || 'hot');
+  if (query.sub) params.set('subCategoryId', query.sub);
+  if (query.status) params.set('bookStatus', query.status);
+  if (query.words) params.set('wordNumber', query.words);
+  try {
+    const response = await fetchWithTimeout(`${API}/api/discover/category?${params.toString()}`, { signal: backgroundSignal() }, 20000);
+    const data = await response.json();
+    if (req !== _catReq || C.sig !== sig || routePath() !== 'category') return;
+    if (!response.ok || data.code !== 200 || !data.data) {
+      C.loading = false;
+      C.error = (data && data.msg) || '分类加载失败';
+      C.empty = false;
+      paintCategory($('app'), currentCategoryQuery());
+      return;
+    }
+    const books = data.data.books || [];
+    C.books = replace ? books : C.books.concat(books);
+    C.offset = Number(data.data.offset) || C.books.length;
+    C.hasMore = !!data.data.has_more;
+    C.loading = false;
+    C.error = '';
+    C.empty = C.books.length === 0;
+  } catch (e) {
+    if (req !== _catReq || C.sig !== sig || routePath() !== 'category' || (e && e.name === 'AbortError')) return;
+    C.loading = false;
+    C.error = '分类加载失败，请稍后再试';
+  }
+  if (routePath() === 'category') paintCategory($('app'), currentCategoryQuery());
+}
+
+async function loadMoreCategory() {
+  if (C.loading || !C.hasMore) return;
+  const query = currentCategoryQuery();
+  if (categorySig(query) !== C.sig) return;
+  C.loading = true;
+  paintCategory($('app'), query);
+  await fetchCategoryPage(query, false);
+}
+
 function loadMoreComments(bid) {
   const d = cache.detail[bid]; if (!d || !d.comments) return;
   commentPage.offset += 20;

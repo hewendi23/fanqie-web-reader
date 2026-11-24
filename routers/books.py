@@ -98,12 +98,22 @@ def _html_paragraphs(content_html: str) -> list[str]:
 
 # ====== 搜索 ======
 
+def _tag_text(value) -> str:
+    """Search cards split Tags as text. Upstream sometimes sends a list."""
+    if isinstance(value, list):
+        return ",".join(str(tag) for tag in value if tag not in (None, ""))
+    if value is None:
+        return ""
+    return str(value)
+
+
 def _map_unidbg_book(item: dict) -> dict:
-    tags = item.get("tagsStr") or ""
-    if not tags and isinstance(item.get("tags"), list):
-        tags = ",".join(item["tags"])
+    tags = _tag_text(item.get("tagsStr"))
+    if not tags:
+        tags = _tag_text(item.get("tags"))
+    book_id = item.get("bookId", "")
     return {
-        "BookID": item.get("bookId", ""),
+        "BookID": "" if book_id is None else str(book_id),
         "Name": item.get("bookName", ""),
         "Author": item.get("author", ""),
         "Desc": item.get("description", ""),
@@ -164,7 +174,7 @@ def _extract_books_from_tabs(tabs: list) -> list:
             if bid:
                 stat = bd.get("creation_status", "")
                 books.append({
-                    "BookID": bid,
+                    "BookID": str(bid),
                     "Name": bd.get("book_name", ""),
                     "Author": bd.get("author", ""),
                     "Desc": bd.get("abstract", ""),
@@ -174,7 +184,7 @@ def _extract_books_from_tabs(tabs: list) -> list:
                     "Score": bd.get("score", ""),
                     "WordCount": bd.get("word_number", 0),
                     "Status": _STATUS_MAP.get(str(stat), ""),
-                    "Tags": bd.get("tags", ""),
+                    "Tags": _tag_text(bd.get("tags", "")),
                     "ReadCount": bd.get("read_count", 0),
                 })
     return books
@@ -205,7 +215,7 @@ async def author_books(author_id: str = Query(...)):
             if bid:
                 stat = str(bd.get("creation_status", ""))
                 books.append({
-                    "BookID": bid,
+                    "BookID": str(bid),
                     "Name": bd.get("book_name", ""),
                     "ShortName": bd.get("book_short_name", ""),
                     "Author": bd.get("author", ""),
@@ -216,7 +226,7 @@ async def author_books(author_id: str = Query(...)):
                     "Score": bd.get("score", ""),
                     "WordCount": bd.get("word_number", 0),
                     "Status": _STATUS_MAP.get(stat, ""),
-                    "Tags": bd.get("tags", ""),
+                    "Tags": _tag_text(bd.get("tags", "")),
                     "ReadCount": bd.get("read_count", 0),
                     "ReadCountText": bd.get("read_cnt_text", ""),
                 })

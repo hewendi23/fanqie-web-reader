@@ -31,8 +31,27 @@ function safeImgUrl(u) {
 }
 function fetchWithTimeout(url, opts = {}, ms = 15000) {
   const ctrl = new AbortController();
-  const id = setTimeout(() => ctrl.abort(), ms);
-  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(id));
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  const upstream = opts.signal;
+  if (upstream) {
+    if (upstream.aborted) ctrl.abort();
+    else upstream.addEventListener('abort', () => ctrl.abort(), { once: true });
+  }
+  const rest = { ...opts };
+  delete rest.signal;
+  return fetch(url, { ...rest, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+}
+
+function coverFallback(img) {
+  if (!img) return;
+  img.onerror = null;
+  img.src = FALLBACK_IMG;
+}
+
+function bookTags(book) {
+  const raw = book && book.Tags;
+  const list = Array.isArray(raw) ? raw : String(raw == null ? '' : raw).split(',');
+  return list.map(tag => String(tag == null ? '' : tag).trim()).filter(Boolean);
 }
 
 // ---- IndexedDB ----
@@ -778,6 +797,24 @@ function skeletonHome() {
     </div>
   </div>`;
   return h;
+}
+
+function skeletonBookstore() {
+  return `<div class="skel-discover">
+    <div class="skel-discover-tags" style="margin-top:8px">
+      ${[64, 64, 64].map(w => `<div class="skel-pill" style="width:${w}px;height:32px"></div>`).join('')}
+    </div>
+    <div class="skel-discover-section">
+      <div class="skel-line" style="height:14px;margin-right:60%;margin-bottom:12px"></div>
+      <div class="skel-discover-tags">
+        ${[82, 90, 72, 84, 78].map(w => `<div class="skel-pill" style="width:${w}px;height:32px"></div>`).join('')}
+      </div>
+    </div>
+    <div class="skel-discover-section">
+      <div class="skel-line" style="height:14px;margin-right:50%;margin-bottom:12px"></div>
+      <div class="book-rail">${[0, 1, 2, 3].map(() => '<div class="skel-rail-card"></div>').join('')}</div>
+    </div>
+  </div>`;
 }
 
 // 2. Search results skeleton (book cards list)

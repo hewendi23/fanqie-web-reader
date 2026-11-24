@@ -2,40 +2,42 @@
 const routes = [];
 function route(path, handler) { routes.push({ path, handler }); }
 
-// Track the last top-level tab for smart back navigation
-let lastTopTab = 'search';
+// Track where detail/reader should return. Discover is the bookstore, not an empty search.
+let lastTopTab = 'discover';
+let discoverTab = '';
 
 function navigate(hash) { location.hash = hash; }
 
 function goBack() {
-  const hash = location.hash.slice(1) || 'search';
+  const hash = location.hash.slice(1) || 'discover';
   const path = hash.split('?')[0];
   const qs = hash.split('?')[1];
   const q = {};
   if (qs) new URLSearchParams(qs).forEach((v,k) => q[k] = v);
 
   if (path === 'search' && q.q) {
-    // Search results → back to home (clear query)
     $('searchInput').value = '';
     updateClearBtn();
-    location.hash = 'search';
+    S.key = '';
+    location.hash = discoverTab ? `discover?tab=${encodeURIComponent(discoverTab)}` : 'discover';
+  } else if (path === 'category' || path === 'categories') {
+    location.hash = discoverTab ? `discover?tab=${encodeURIComponent(discoverTab)}` : 'discover';
   } else if (path === 'reader' && q.book_id) {
     location.hash = `detail?book_id=${q.book_id}`;
   } else if (path === 'comments' && q.book_id) {
     location.hash = `detail?book_id=${q.book_id}`;
   } else if (path === 'author') {
-    // Author page → back to the detail page that linked here
     const fromBookId = q.from || '';
     location.hash = fromBookId ? `detail?book_id=${fromBookId}` : lastTopTab;
   } else if (path === 'detail') {
     location.hash = lastTopTab;
   } else {
-    location.hash = 'search';
+    location.hash = 'discover';
   }
 }
 
 function router() {
-  const hash = location.hash.slice(1) || 'search';
+  const hash = location.hash.slice(1) || 'discover';
   const [path, queryStr] = hash.split('?');
   const query = {};
   if (queryStr) new URLSearchParams(queryStr).forEach((v,k) => query[k] = v);
@@ -50,19 +52,17 @@ function router() {
   const isReader = path === 'reader';
   const isPageMode = isReader && getReadMode() === 'page';
   const hasSearchQuery = path === 'search' && query.q;
-  const showSearch = path === 'search' || path === 'shelf';
-  const showBottomNav = (showSearch || path === 'profile') && !isPageMode;
+  const browsing = path === 'discover' || path === 'category' || path === 'categories' || path === 'search';
+  const showSearch = browsing || path === 'shelf';
+  const showBottomNav = (browsing || path === 'shelf' || path === 'profile') && !isPageMode;
 
-  // Track which top-level tab the user was on before going deeper
-  if (path === 'search' || path === 'shelf' || path === 'profile') {
-    lastTopTab = path;
+  if (path === 'discover' || path === 'shelf' || path === 'profile' || path === 'category' || path === 'categories' || hasSearchQuery) {
+    lastTopTab = hash;
   }
   const header = document.querySelector('.header');
   if (header) header.style.display = isReader ? 'none' : '';
   document.body.style.overflow = isPageMode ? 'hidden' : '';
-  // Show back button on: detail, comments, search-with-query (results page)
-  // Hide on: search-home, shelf, reader (has its own back)
-  const showBackBtn = hasSearchQuery || (!showSearch && !isReader);
+  const showBackBtn = hasSearchQuery || path === 'category' || path === 'categories' || (!showSearch && !isReader);
   $('backBtn').classList.toggle('hidden', !showBackBtn);
   $('searchBar').classList.toggle('hidden', !showSearch);
   $('searchTabs').classList.toggle('hidden', path !== 'search');
@@ -70,8 +70,9 @@ function router() {
   const bottomNav = $('bottomNav');
   if (bottomNav) {
     bottomNav.classList.toggle('hidden', !showBottomNav);
+    const navRoute = (path === 'search' || path === 'category' || path === 'categories') ? 'discover' : path;
     bottomNav.querySelectorAll('.bottom-nav-item').forEach(item => {
-      item.classList.toggle('active', item.dataset.route === path);
+      item.classList.toggle('active', item.dataset.route === navRoute);
     });
   }
 
@@ -83,24 +84,60 @@ window.addEventListener('hashchange', router);
 
 // ====== Search state ======
 let S = { key: '', tab: 3, loading: false, tabCache: {} };
+let _searchReq = 0;
+function routePath() { return (location.hash.slice(1) || 'discover').split('?')[0]; }
+function currentSearchQuery() {
+  if (routePath() !== 'search') return '';
+  const qs = (location.hash.slice(1) || '').split('?')[1] || '';
+  try { return new URLSearchParams(qs).get('q') || ''; }
+  catch (e) { return ''; }
+}
+function searchStillCurrent(key) { return currentSearchQuery() === key; }
+function searchHasMore(data, batch) {
+  if (data && typeof data.has_more === 'boolean') return data.has_more;
+  return (batch || []).length >= 20;
+}
+function paintSearch() {
+  try { renderResults(); }
+  catch (e) {
+    console.error(e);
+    S.loading = false;
+    S.error = '搜索结果无法显示，请重试';
+    renderSearchEmpty($('app'));
+  }
+}
 function getTabData() { return S.tabCache[S.tab] || { books: [], filtered: [], offset: 0, hasMore: false, sortBy: 'default', tagFilter: '' }; }
 function saveTabData(d) { S.tabCache[S.tab] = d; }
 
 // ====== Routes ======
-route('search', (q, app) => {
-  $('pageTitle').textContent = '番茄小说';
+route('discover', (q, app) => {
+  $('pageTitle').textContent = '书城';
   $('searchInput').placeholder = '搜索书名、作者...';
-  if (q.q) {
-    $('searchInput').value = q.q;
-    doSearch();
-  } else {
-    // Back to home — clear search state so home renders
+  if (S.key) {
     $('searchInput').value = '';
-    updateClearBtn();
     S.key = '';
-    saveTabData({ books: [], filtered: [], offset: 0, hasMore: false, sortBy: 'default', tagFilter: '' });
-    renderHome(app);
+    updateClearBtn();
   }
+  renderDiscover(app, q);
+});
+
+route('categories', (q, app) => {
+  $('pageTitle').textContent = '全部分类';
+  $('searchInput').placeholder = '搜索书名、作者...';
+  renderAllCategories(app);
+});
+
+route('category', (q, app) => {
+  $('searchInput').placeholder = '搜索书名、作者...';
+  renderCategory(app, q);
+});
+
+route('search', (q, app) => {
+  if (!q.q) { navigate(discoverTab ? `discover?tab=${encodeURIComponent(discoverTab)}` : 'discover'); return; }
+  $('pageTitle').textContent = '搜索';
+  $('searchInput').placeholder = '搜索书名、作者...';
+  $('searchInput').value = q.q;
+  doSearch();
 });
 
 route('shelf', (q, app) => { const count = loadData().shelf.length; $('pageTitle').textContent = `我的书架 (${count})`; $('searchInput').value = ''; $('searchInput').placeholder = '搜索书架...'; updateClearBtn(); _shelfFilter = ''; renderShelf(app); });
@@ -110,7 +147,7 @@ route('profile', (q, app) => { $('pageTitle').textContent = '我的'; renderProf
 route('author', async (q, app) => {
   const authorId = q.author_id || '';
   const name = q.name || '';
-  if (!authorId && !name) { navigate('search'); return; }
+  if (!authorId && !name) { navigate('discover'); return; }
   $('pageTitle').textContent = name || '作者';
   app.innerHTML = skeletonAuthor();
   renderAuthorPage(app, authorId, name);
@@ -160,13 +197,13 @@ function renderTabs() {
 function selectTab(id) {
   S.tab = id; renderTabs();
   const td = getTabData();
-  if (td.books.length > 0) renderResults($('app')); else renderHome($('app'));
+  if (td.books.length > 0) renderResults($('app')); else renderSearchEmpty($('app'));
 }
 
 function applyFilters() {
   const td = getTabData();
   let list = td.books.slice();
-  if (td.tagFilter) list = list.filter(b => (b.Tags||'').toLowerCase().includes(td.tagFilter.toLowerCase()));
+  if (td.tagFilter) list = list.filter(b => bookTags(b).join(',').toLowerCase().includes(td.tagFilter.toLowerCase()));
   if (td.sortBy==='read') list.sort((a,b)=>(b.ReadCount||0)-(a.ReadCount||0));
   else if (td.sortBy==='words') list.sort((a,b)=>(b.WordCount||0)-(a.WordCount||0));
   else if (td.sortBy==='chapters') list.sort((a,b)=>(b.ChapterCount||0)-(a.ChapterCount||0));
@@ -177,24 +214,41 @@ async function doSearch() {
   const hash = location.hash.slice(1)||'';
   if (hash.startsWith('shelf')) { _shelfFilter = $('searchInput').value.trim(); _applyShelfFilter(); return; }
   const key = $('searchInput').value.trim();
-  if (!key) return;
-  // Update URL so back button logic detects search results state
-  const targetHash = `search?q=${encodeURIComponent(key)}`;
-  if (location.hash.slice(1) !== targetHash) {
-    location.hash = targetHash;
-    return; // hashchange will call router() which calls doSearch() again via the route handler
+  if (!key) {
+    const path = (location.hash.slice(1) || 'discover').split('?')[0];
+    if (path !== 'shelf' && path !== 'discover') navigate('discover');
+    return;
   }
-  S.key = key; S.loading = true;
+  // Compare the decoded query. Raw hash text can differ by percent-encoding
+  // and then assigning location.hash does not fire hashchange, so the fetch
+  // never starts and the page stays blank under the title 「搜索」.
+  if (currentSearchQuery() !== key) {
+    const before = location.hash;
+    location.hash = `search?q=${encodeURIComponent(key)}`;
+    if (location.hash !== before) return;
+  }
+  if (typeof abortDiscoverLoads === 'function') abortDiscoverLoads();
+  S.key = key; S.loading = true; S.error = '';
+  const req = ++_searchReq;
   saveTabData({ books: [], filtered: [], offset: 0, hasMore: false, sortBy: 'default', tagFilter: '' });
-  hideSuggest(); addHistory(key); updateClearBtn(); renderResults();
+  hideSuggest(); addHistory(key); updateClearBtn(); paintSearch();
   try {
-    const r = await fetchWithTimeout(`${API}/api/search?key=${encodeURIComponent(key)}&tab_type=${S.tab}`);
+    const r = await fetchWithTimeout(`${API}/api/search?key=${encodeURIComponent(key)}&tab_type=${S.tab}`, {}, 30000);
     const data = await r.json();
+    if (req !== _searchReq || !searchStillCurrent(key)) { S.loading = false; return; }
     const td = getTabData();
-    td.books = data.code===200 ? (data.data||[]) : [];
-    td.hasMore = td.books.length >= 10; applyFilters();
-  } catch(e) { getTabData().books = []; }
-  S.loading = false; renderResults();
+    const batch = data.code===200 && Array.isArray(data.data) ? data.data : [];
+    td.books = batch;
+    td.hasMore = data.code===200 ? searchHasMore(data, batch) : false;
+    S.error = data.code===200 ? '' : '搜索失败，请稍后重试';
+    applyFilters();
+  } catch(e) {
+    if (req !== _searchReq || !searchStillCurrent(key)) { S.loading = false; return; }
+    getTabData().books = [];
+    S.error = '搜索失败，请稍后重试';
+  }
+  S.loading = false;
+  if (req === _searchReq && searchStillCurrent(key)) paintSearch();
 }
 
 function addHistory(key) {
@@ -205,22 +259,32 @@ function addHistory(key) {
   saveSearchHistory(data.searchHistory);
 }
 
-function setSort(s) { const td = getTabData(); td.sortBy = td.sortBy===s?'default':s; applyFilters(); renderResults(); }
-function setTag(t) { const td = getTabData(); td.tagFilter = td.tagFilter===t?'':t; applyFilters(); renderResults(); }
+function setSort(s) { const td = getTabData(); td.sortBy = td.sortBy===s?'default':s; applyFilters(); paintSearch(); }
+function setTag(t) { const td = getTabData(); td.tagFilter = td.tagFilter===t?'':t; applyFilters(); paintSearch(); }
 
 async function loadMore() {
   if (S.loading) return;
   const td = getTabData();
-  if (!td.hasMore) return;
-  S.loading = true; td.offset += 10; renderResults();
+  if (!td.hasMore || !searchStillCurrent(S.key)) return;
+  const req = ++_searchReq;
+  const key = S.key;
+  S.loading = true; S.error = ''; td.offset += 20; paintSearch();
   try {
-    const r = await fetchWithTimeout(`${API}/api/search?key=${encodeURIComponent(S.key)}&tab_type=${S.tab}&offset=${td.offset}`);
+    const r = await fetchWithTimeout(`${API}/api/search?key=${encodeURIComponent(key)}&tab_type=${S.tab}&offset=${td.offset}`, {}, 30000);
     const data = await r.json();
-    const more = data.code===200 ? (data.data||[]) : [];
+    if (req !== _searchReq || !searchStillCurrent(key)) { S.loading = false; return; }
+    const more = data.code===200 && Array.isArray(data.data) ? data.data : [];
     td.books = td.books.concat(more);
-    td.hasMore = more.length >= 10; applyFilters();
-  } catch(e) { td.hasMore = false; }
-  S.loading = false; renderResults();
+    td.hasMore = data.code===200 ? searchHasMore(data, more) : false;
+    if (data.code!==200) S.error = '搜索失败，请稍后重试';
+    applyFilters();
+  } catch(e) {
+    if (req !== _searchReq || !searchStillCurrent(key)) { S.loading = false; return; }
+    td.hasMore = false;
+    S.error = '搜索失败，请稍后重试';
+  }
+  S.loading = false;
+  if (req === _searchReq && searchStillCurrent(key)) paintSearch();
 }
 
 // ====== Search suggest + clear ======
@@ -252,10 +316,27 @@ function quickSearch(key) { $('searchInput').value = key; doSearch(); }
 function delHistory(key) { const data = loadData(); data.searchHistory = data.searchHistory.filter(s => s !== key); saveSearchHistory(data.searchHistory); showSuggest(); }
 
 function onSearchInput() { updateClearBtn(); const hash = location.hash.slice(1)||''; if (hash.startsWith('shelf')) { _shelfFilter = $('searchInput').value.trim(); _applyShelfFilter(); } else { filterSuggest($('searchInput').value); } }
-function clearSearch() { $('searchInput').value = ''; updateClearBtn(); const hash = location.hash.slice(1)||''; if (hash.startsWith('shelf')) { _shelfFilter = ''; _applyShelfFilter(); $('searchInput').focus(); } else { $('searchInput').focus(); showSuggest(); } }
+function clearSearch() {
+  $('searchInput').value = '';
+  updateClearBtn();
+  const hash = location.hash.slice(1) || '';
+  if (hash.startsWith('shelf')) { _shelfFilter = ''; _applyShelfFilter(); $('searchInput').focus(); return; }
+  if (hash.startsWith('search')) { S.key = ''; navigate('discover'); return; }
+  $('searchInput').focus();
+  showSuggest();
+}
 function updateClearBtn() { $('searchClear').classList.toggle('visible', $('searchInput').value.length > 0); }
 
 // ====== Global event listeners ======
+
+document.addEventListener('click', function(e) {
+  const tab = e.target.closest('[data-discover-tab]');
+  if (tab) { selectDiscoverTab(tab.dataset.discoverTab); return; }
+  const cat = e.target.closest('[data-cat-id]');
+  if (cat && cat.dataset.catId) { openCategory(cat.dataset.catId, cat.dataset.catName || ''); return; }
+  const filter = e.target.closest('[data-cat-filter]');
+  if (filter) { setCategoryFilter(filter.dataset.catFilter, filter.dataset.catValue || ''); }
+});
 
 // Suggest clicks
 document.addEventListener('mousedown', function(e) {
@@ -267,7 +348,7 @@ document.addEventListener('mousedown', function(e) {
 
 // Unified scroll handler (non-reader pages)
 window.addEventListener('scroll', function() {
-  const hash = location.hash.slice(1) || 'search';
+  const hash = location.hash.slice(1) || 'discover';
   if (hash.startsWith('reader')) return;
   updateProgress();
   const btn = $('backTop');
