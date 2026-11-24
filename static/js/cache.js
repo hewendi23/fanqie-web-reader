@@ -3,6 +3,9 @@ const cache = { detail: {}, content: new Map() };
 const CONTENT_CACHE_MAX = 20;
 const inflight = {};
 
+// 正文缓存换代：旧缓存是剥掉插图之后的纯文本，继续用会让插图章节永远不显示图。
+const CONTENT_IDB_PREFIX = 'c2:';
+
 function setContentCache(key, val) {
   if (cache.content.has(key)) cache.content.delete(key);
   cache.content.set(key, val);
@@ -10,7 +13,7 @@ function setContentCache(key, val) {
     const oldest = cache.content.keys().next().value;
     cache.content.delete(oldest);
   }
-  idbPut(key, val);
+  idbPut(CONTENT_IDB_PREFIX + key, val);
 }
 function getContentCache(key) {
   if (cache.content.has(key)) {
@@ -63,7 +66,7 @@ async function fetchContent(chapterId, bookId) {
   if (inflight['c_'+chapterId]) return inflight['c_'+chapterId];
   const p = (async () => {
     try {
-      const idbVal = await idbGet(chapterId);
+      const idbVal = await idbGet(CONTENT_IDB_PREFIX + chapterId);
       if (idbVal) { setContentCache(chapterId, idbVal); return; }
     } catch(e) {}
     try {

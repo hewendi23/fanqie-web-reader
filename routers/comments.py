@@ -451,6 +451,27 @@ def _normalize_comments(raw) -> list:
 
 
 _ALLOWED_IMG_HOSTS = ("fqnovelpic.com", "byteimg.com", "bytecdn.cn", "toutiao.com", "bytedance.com", "ixigua.com")
+_IMG_FETCH_HEADERS = {
+    "Referer": "https://fanqienovel.com/",
+    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+}
+_HEIC_BRANDS = (b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1", b"heim", b"heis")
+
+
+def _img_host_allowed(host: str) -> bool:
+    """CDN 主机名必须完全等于允许后缀，或是其子域。避免 evilbyteimg.com 这种后缀伪造。"""
+    name = (host or "").lower().split(":")[0].rstrip(".")
+    return any(name == suffix or name.endswith("." + suffix) for suffix in _ALLOWED_IMG_HOSTS)
+
+
+def _is_heic_payload(content: bytes, content_type: str, url: str) -> bool:
+    ctype = (content_type or "").lower()
+    if "heic" in ctype or "heif" in ctype:
+        return True
+    path = urlparse(url).path.lower()
+    if path.endswith((".heic", ".heif")):
+        return True
+    return len(content) >= 12 and content[4:8] == b"ftyp" and content[8:12] in _HEIC_BRANDS
 
 _heif_registered = False
 
@@ -474,22 +495,27 @@ async def img_proxy(url: str = Query(..., min_length=1)):
     """Proxy image requests to bypass IP-bound signature restrictions on Fanqie CDN avatars.
     Converts HEIC responses to JPEG for browser compatibility."""
     parsed = urlparse(url)
-    if not parsed.scheme or not parsed.netloc:
+    if not parsed.scheme or not parsed.hostname:
         return Response(status_code=400, content="invalid url")
-    if not parsed.scheme.startswith("http"):
+    if parsed.scheme not in ("http", "https"):
         return Response(status_code=400, content="invalid scheme")
-    if not any(parsed.netloc.endswith(h) for h in _ALLOWED_IMG_HOSTS):
+    if not _img_host_allowed(parsed.hostname):
         return Response(status_code=403, content="host not allowed")
 
     try:
-        r = await client.get(url, timeout=15.0)
+        r = await client.get(url, timeout=15.0, headers=_IMG_FETCH_HEADERS)
+        final = urlparse(str(r.url))
+        if not _img_host_allowed(final.hostname or ""):
+            logger.warning("img_proxy redirected off allowlist: %s", final.netloc)
+            return Response(status_code=403, content="host not allowed")
         if r.status_code != 200:
             logger.warning("img_proxy upstream %d for %s", r.status_code, parsed.netloc)
             return Response(status_code=r.status_code, content=r.content)
         content_type = r.headers.get("content-type", "image/jpeg")
 
-        # Convert HEIC to JPEG for browser compatibility
-        if "heic" in content_type.lower() or "heif" in content_type.lower():
+        # Convert HEIC to JPEG for browser compatibility. Some chapter CDNs
+        # label HEIC as octet-stream, so also sniff the ftyp brand and the path.
+        if _is_heic_payload(r.content, content_type, str(r.url)):
             _ensure_heif_support()
             if _heif_registered:
                 try:
