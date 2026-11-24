@@ -9,8 +9,8 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from shared import client, cors_origins, _fanqie_client, logger
-from routers import books, comments, user
+from routers import books, comments, discover, user
+from shared import _fanqie_client, client, cors_origins, logger
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -46,6 +46,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(books.router)
 app.include_router(comments.router)
 app.include_router(user.router)
+app.include_router(discover.router)
 
 
 async def _watch_static():
