@@ -1,7 +1,7 @@
 import hashlib
 import re
 import time
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
@@ -327,56 +327,187 @@ async def paragraph_comment_replies(body: ParaCommentRepliesPayload):
     return {"code": 200, "data": replies, "msg": "success" if replies else "no replies"}
 
 
+# unidbg 0.0.6 的 /api/fqcomment/reply/list 会打同一条
+# /novel/commentapi/reply/list/{id}/v1，但 body 不带 comment_type。
+# 缺这个字段时番茄返回 HTTP 200、reply_list=[]、total=0，即使主评 stat.reply_count>0。
+# 补上 comment_type=1 后同一设备和同一路径能返回回复正文。
+_FQNOVEL_REPLY_ORIGIN = "https://api5-normal-sinfonlineb.fqnovel.com"
+_REPLY_QUERY_ENCODED = frozenset({"device_type", "resolution"})
+
+
+def _query_component(key: str, value: str) -> str:
+    text = "" if value is None else str(value)
+    if key in _REPLY_QUERY_ENCODED:
+        return quote(text, safe="*")
+    return text
+
+
+def _device_reply_query(device: dict) -> str:
+    """Query string matching unidbg FQVariable(DeviceInfo) + buildCommonApiParams."""
+    version = str(device.get("versionCode") or "68132")
+    pairs = [
+        ("iid", device.get("installId") or ""),
+        ("device_id", device.get("deviceId") or ""),
+        ("ac", "wifi"),
+        ("channel", "googleplay"),
+        ("aid", device.get("aid") or "1967"),
+        ("app_name", "novelapp"),
+        ("version_code", version),
+        ("version_name", device.get("versionName") or "6.8.1.32"),
+        ("device_platform", "android"),
+        ("os", "android"),
+        ("ssmix", "a"),
+        ("device_type", device.get("deviceType") or ""),
+        ("device_brand", device.get("deviceBrand") or ""),
+        ("language", "zh"),
+        ("os_api", device.get("osApi") if device.get("osApi") is not None else "32"),
+        ("os_version", device.get("osVersion") or "13"),
+        ("manifest_version_code", version),
+        ("resolution", device.get("resolution") or ""),
+        ("dpi", device.get("dpi") or ""),
+        ("update_version_code", device.get("updateVersionCode") or version),
+        ("_rticket", int(time.time() * 1000)),
+        ("host_abi", device.get("hostAbi") or ""),
+        ("dragon_device_type", "phone"),
+        ("pv_player", version),
+        ("compliance_status", "0"),
+        ("need_personal_recommend", "1"),
+        ("player_so_load", "1"),
+        ("is_android_pad_screen", "0"),
+        ("rom_version", device.get("romVersion") or ""),
+        ("cdid", device.get("cdid") or ""),
+    ]
+    return "&".join(f"{key}={_query_component(key, value)}" for key, value in pairs)
+
+
+def _reply_request_body(comment_id: str, book_id: str, chapter_id: str, count: int) -> dict:
+    return {
+        "comment_id": comment_id,
+        "group_id": chapter_id,
+        "group_type": 15,
+        "comment_source": 502,
+        "comment_type": 1,
+        "business_param": {"book_id": book_id, "need_count": True},
+        "count": count,
+    }
+
+
+async def _unidbg_reply_list(comment_id: str, book_id: str, chapter_id: str, count: int) -> list:
+    """High-level unidbg reply API. Empty on stock 0.0.6 because comment_type is omitted."""
+    if not UNIDBG_API:
+        return []
+    try:
+        r = await _fanqie_client.post(
+            f"{UNIDBG_API}/api/fqcomment/reply/list",
+            json={
+                "commentId": comment_id,
+                "bookId": book_id,
+                "chapterId": chapter_id,
+                "count": count,
+            },
+            timeout=_REPLY_FETCH_TIMEOUT_S,
+        )
+        return _normalize_replies(r.json())
+    except Exception as e:
+        logger.warning(
+            "paragraph reply list unidbg 失败 comment_id=%s: %s",
+            comment_id, type(e).__name__,
+        )
+        return []
+
+
+async def _signed_reply_list(comment_id: str, book_id: str, chapter_id: str, count: int) -> list:
+    """Same reply/list path, with comment_type=1, signed by the local unidbg already running."""
+    if not UNIDBG_API:
+        return []
+    try:
+        pool = await _fanqie_client.get(
+            f"{UNIDBG_API}/api/device/pool/status",
+            timeout=_REPLY_FETCH_TIMEOUT_S,
+        )
+        devices = pool.json().get("devices") if pool.status_code == 200 else None
+    except Exception as e:
+        logger.info("reply device pool 不可用 comment_id=%s: %s", comment_id, type(e).__name__)
+        return []
+    if not isinstance(devices, list):
+        return []
+
+    body = _reply_request_body(comment_id, book_id, chapter_id, count)
+    for device in devices[:2]:
+        if not isinstance(device, dict) or not device.get("deviceId") or not device.get("installId"):
+            continue
+        url = (
+            f"{_FQNOVEL_REPLY_ORIGIN}/novel/commentapi/reply/list/{comment_id}/v1?"
+            f"{_device_reply_query(device)}"
+        )
+        try:
+            signed_resp = await _fanqie_client.post(
+                f"{UNIDBG_API}/api/fq-signature/generateSignatureWithMap",
+                json={"url": url, "headerMap": {"User-Agent": device.get("userAgent") or "com.dragon.read"}},
+                timeout=_REPLY_FETCH_TIMEOUT_S,
+            )
+            signed = signed_resp.json()
+        except Exception as e:
+            logger.info("reply signature 失败 comment_id=%s: %s", comment_id, type(e).__name__)
+            continue
+        if not isinstance(signed, dict) or signed.get("error") or not signed.get("X-Argus"):
+            continue
+        headers = {
+            "Cookie": device.get("cookie") or "",
+            "User-Agent": device.get("userAgent") or "com.dragon.read",
+            "Accept": "application/json; charset=utf-8,application/x-protobuf",
+            "Content-Type": "application/json",
+            "comment-source": "502",
+            "server-channel": "17",
+        }
+        headers.update({key: str(value) for key, value in signed.items() if isinstance(value, str)})
+        try:
+            upstream = await client.post(url, json=body, headers=headers, timeout=_REPLY_FETCH_TIMEOUT_S)
+            if upstream.status_code != 200:
+                continue
+            replies = _normalize_replies(upstream.json())
+        except Exception as e:
+            logger.info("reply signed fetch 失败 comment_id=%s: %s", comment_id, type(e).__name__)
+            continue
+        if replies:
+            return replies
+    return []
+
+
 async def _fetch_comment_replies(
     comment_id: str,
     book_id: str,
     chapter_id: str,
     count: int = _REPLY_FETCH_COUNT,
 ) -> list:
-    """Fetch nested replies. Try public fqapi first, then unidbg reply/list.
+    """Fetch nested replies without requiring a signer the startup scripts do not launch.
 
-    Live unidbg often returns HTTP 200 with an empty reply_list even when
-    stat.reply_count > 0, so an empty fqapi result still falls through.
+    Optional fqapi is used only when FQAPI_API is set. Otherwise unidbg's reply
+    API is tried, then the same reply/list path with comment_type=1.
     """
     comment_id = _require_resource_id(comment_id, "comment_id")
     book_id = _require_resource_id(book_id, "book_id")
     chapter_id = _require_resource_id(chapter_id, "chapter_id")
 
-    raw = await fqapi_get(
-        f"/api/v1/comments/{comment_id}/replies",
-        params={
-            "book_id": book_id,
-            "group_id": chapter_id,
-            "count": count,
-        },
-        timeout=_REPLY_FETCH_TIMEOUT_S,
-    )
-    if raw is not None:
-        replies = _normalize_replies(raw)
-        if replies:
-            return replies
-
-    if UNIDBG_API:
-        try:
-            r = await _fanqie_client.post(
-                f"{UNIDBG_API}/api/fqcomment/reply/list",
-                json={
-                    "commentId": comment_id,
-                    "bookId": book_id,
-                    "chapterId": chapter_id,
-                    "count": count,
-                },
-                timeout=_REPLY_FETCH_TIMEOUT_S,
-            )
-            replies = _normalize_replies(r.json())
+    if FQAPI_API:
+        raw = await fqapi_get(
+            f"/api/v1/comments/{comment_id}/replies",
+            params={
+                "book_id": book_id,
+                "group_id": chapter_id,
+                "count": count,
+            },
+            timeout=_REPLY_FETCH_TIMEOUT_S,
+        )
+        if raw is not None:
+            replies = _normalize_replies(raw)
             if replies:
                 return replies
-        except Exception as e:
-            logger.warning(
-                "paragraph reply list unidbg 失败 comment_id=%s: %s",
-                comment_id, e, exc_info=True,
-            )
-    return []
+
+    replies = await _unidbg_reply_list(comment_id, book_id, chapter_id, count)
+    if replies:
+        return replies
+    return await _signed_reply_list(comment_id, book_id, chapter_id, count)
 
 
 def _mock_para_comments(chapter_id: str, paragraph_idx: int) -> list:

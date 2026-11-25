@@ -192,6 +192,7 @@ def test_paragraph_comment_replies_via_fqapi(client):
         raise AssertionError("fqapi already returned replies")
 
     with (
+        patch("routers.comments.FQAPI_API", "http://fqapi.test"),
         patch("routers.comments.fqapi_get", fake_fqapi),
         patch("routers.comments._fanqie_client.post", fake_post),
     ):
@@ -241,6 +242,7 @@ def test_paragraph_comment_replies_fall_back_to_unidbg_when_fqapi_empty(client):
         return _JsonResp(unidbg_payload)
 
     with (
+        patch("routers.comments.FQAPI_API", "http://fqapi.test"),
         patch("routers.comments.fqapi_get", fake_fqapi),
         patch("routers.comments._fanqie_client.post", fake_post),
         patch("routers.comments.UNIDBG_API", "http://unidbg.test"),
@@ -277,6 +279,194 @@ def test_paragraph_comment_replies_reject_unsafe_ids(client):
         })
 
     assert response.status_code == 400
+
+
+def test_empty_unidbg_reply_list_is_retried_with_comment_type(client):
+    """Stock unidbg reply/list is HTTP 200 with reply_list=[] and total=0.
+
+    The same path returns the thread once comment_type=1 is present.
+    """
+    empty = {
+        "code": 0,
+        "message": "success",
+        "data": {
+            "code": 0,
+            "message": "请求成功",
+            "data": {"reply_list": [], "comment_list_info": {"total": 0, "has_more": False}},
+        },
+    }
+    filled = {
+        "code": 0,
+        "message": "请求成功",
+        "data": {
+            "reply_list": [
+                {
+                    "Common": {
+                        "content": {"text": "这个是土木堡生还者"},
+                        "user_info": {"base_info": {"user_name": "读者乙"}},
+                    },
+                    "reply_to_user_info": {"base_info": {"user_name": "读者甲"}},
+                }
+            ],
+            "comment_list_info": {"total": 1, "has_more": False},
+        },
+    }
+    posted = {}
+
+    class _Resp:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+
+        def json(self):
+            return self._payload
+
+    async def fake_unidbg_post(url, json=None, timeout=None):
+        if url.endswith("/api/fqcomment/reply/list"):
+            return _Resp(empty)
+        if url.endswith("/api/fq-signature/generateSignatureWithMap"):
+            assert "/novel/commentapi/reply/list/7470880687937749785/v1" in json["url"]
+            return _Resp({"X-Argus": "sig", "X-Gorgon": "g"})
+        raise AssertionError(url)
+
+    async def fake_upstream(url, json=None, headers=None, timeout=None):
+        posted["url"] = url
+        posted["json"] = json
+        posted["comment_source"] = headers.get("comment-source")
+        return _Resp(filled)
+
+    async def fake_pool(url, timeout=None):
+        assert url.endswith("/api/device/pool/status")
+        return _Resp({
+            "devices": [{
+                "deviceId": "100",
+                "installId": "200",
+                "aid": "1967",
+                "versionCode": "68132",
+                "versionName": "6.8.1.32",
+                "deviceType": "phone",
+                "deviceBrand": "Xiaomi",
+                "osApi": 33,
+                "osVersion": "13",
+                "resolution": "3200*1440",
+                "dpi": "640",
+                "updateVersionCode": "68132",
+                "hostAbi": "armeabi-v7a",
+                "romVersion": "V433IR+release-keys",
+                "cdid": "cdid",
+                "cookie": "store-region=cn-zj",
+                "userAgent": "com.dragon.read/68132",
+            }]
+        })
+
+    called = {"fqapi": False}
+
+    async def fake_fqapi(*_args, **_kwargs):
+        called["fqapi"] = True
+        return None
+
+    with (
+        patch("routers.comments.FQAPI_API", ""),
+        patch("routers.comments.UNIDBG_API", "http://unidbg.test"),
+        patch("routers.comments.fqapi_get", fake_fqapi),
+        patch("routers.comments._fanqie_client.post", fake_unidbg_post),
+        patch("routers.comments._fanqie_client.get", fake_pool),
+        patch("routers.comments.client.post", fake_upstream),
+    ):
+        response = client.post("/api/paragraph_comment_replies", json={
+            "comment_id": "7470880687937749785",
+            "chapter_id": CHAPTER,
+            "book_id": BOOK,
+        })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"][0]["content"] == "这个是土木堡生还者"
+    assert body["data"][0]["reply_to_user_name"] == "读者甲"
+    assert posted["json"]["comment_type"] == 1
+    assert posted["json"]["comment_source"] == 502
+    assert posted["json"]["group_id"] == CHAPTER
+    assert "3200*1440" in posted["url"]
+    assert "V433IR+release-keys" in posted["url"]
+    assert called["fqapi"] is False
+
+
+def test_empty_reply_body_stays_empty_and_retryable(client):
+    """Both the stock reply/list and the comment_type retry can come back empty.
+
+    The HTTP response stays 200 with no rows so the reader can tap expand again.
+    """
+    empty = {
+        "code": 0,
+        "data": {"data": {"reply_list": [], "comment_list_info": {"total": 0}}},
+    }
+
+    class _Resp:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+
+        def json(self):
+            return self._payload
+
+    async def fake_unidbg_post(url, json=None, timeout=None):
+        if url.endswith("/generateSignatureWithMap"):
+            return _Resp({"X-Argus": "sig"})
+        return _Resp(empty)
+
+    async def fake_pool(url, timeout=None):
+        return _Resp({"devices": [{"deviceId": "100", "installId": "200", "cookie": "c", "userAgent": "ua"}]})
+
+    async def fake_upstream(url, json=None, headers=None, timeout=None):
+        return _Resp(empty)
+
+    with (
+        patch("routers.comments.FQAPI_API", ""),
+        patch("routers.comments.UNIDBG_API", "http://unidbg.test"),
+        patch("routers.comments._fanqie_client.post", fake_unidbg_post),
+        patch("routers.comments._fanqie_client.get", fake_pool),
+        patch("routers.comments.client.post", fake_upstream),
+    ):
+        response = client.post("/api/paragraph_comment_replies", json={
+            "comment_id": "7470880687937749785",
+            "chapter_id": CHAPTER,
+            "book_id": BOOK,
+        })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"] == []
+    assert body["msg"] == "no replies"
+
+
+def test_default_reply_fetch_does_not_call_fqapi(client):
+    async def boom(*_args, **_kwargs):
+        raise AssertionError("default startup must not call fqapi")
+
+    async def fake_unidbg_post(url, json=None, timeout=None):
+        class _Resp:
+            def json(self):
+                return {
+                    "code": 0,
+                    "data": {"reply_list": [{"common": {"content": {"text": "来自 unidbg"}, "user_info": {"base_info": {"user_name": "甲"}}}}]},
+                }
+        return _Resp()
+
+    with (
+        patch("routers.comments.FQAPI_API", ""),
+        patch("routers.comments.UNIDBG_API", "http://unidbg.test"),
+        patch("routers.comments.fqapi_get", boom),
+        patch("routers.comments._fanqie_client.post", fake_unidbg_post),
+        patch("routers.comments.client.get", boom),
+    ):
+        response = client.post("/api/paragraph_comment_replies", json={
+            "comment_id": "555666777",
+            "chapter_id": CHAPTER,
+            "book_id": BOOK,
+        })
+
+    assert response.status_code == 200
+    assert response.json()["data"][0]["content"] == "来自 unidbg"
 
 
 def test_fqapi_reply_url_stays_on_comment_replies(monkeypatch):
