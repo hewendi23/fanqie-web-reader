@@ -42,6 +42,8 @@ services:
     environment:
       - PARA_COMMENT_MOCK=false
       - UNIDBG_API=http://unidbg:8099
+      - FQAPI_API=${FQAPI_API:-http://127.0.0.1:18921}
+      - FQAPI_TOKEN=${FQAPI_TOKEN:-}
       - COMMUNITY_API=${COMMUNITY_API:-http://101.35.133.34:5000,https://tt.sjmyzq.cn}
       - CORS_ORIGINS=${CORS_ORIGINS:-}
     restart: unless-stopped
