@@ -15,7 +15,7 @@
 - **🎨 五套阅读主题** — 默认（暖纸）、羊皮纸、护眼绿、暗黑、墨水屏
 - **🖤 墨水屏模式** — 高对比黑白、全局禁止动画、整页翻动、工具栏透明
 - **🔤 排版调节** — 字号 14–28px、行高 1.4–2.4、三种字体（黑体/宋体/楷体）
-- **💬 段评系统** — 段落评论阅读，支持嵌套回复
+- **💬 段评系统** — 段落评论阅读；有回复时点「展开 N 条回复」按需加载楼中楼，可收起
 
 ### 浏览与发现
 - **📚 书城** — 「发现」打开书城：热门分类、频道和官方书单，可进入全部分类
@@ -86,11 +86,13 @@ python server.py
 
 ### 数据源与段评
 
-搜索 / 详情 / 章节目录 / 正文的优先数据源是 [fqnovel-unidbg](https://github.com/mtongle/fqnovel-unidbg) 签名代理（番茄 App 协议，自带风控签名，不再依赖第三方社区 API 存活）；unidbg 不可用时自动回退到社区 API。书城分类只走 unidbg 已提供的 `/api/fqnovel/category/front`、`/landing`、`/cell`（v0.0.6），不使用用户 Cookie，unidbg 不可用时书城提示暂不可用，不会改成关键词搜索。段评同样依赖 unidbg：
+搜索 / 详情 / 章节目录 / 正文的优先数据源是 [fqnovel-unidbg](https://github.com/mtongle/fqnovel-unidbg) 签名代理（番茄 App 协议，自带风控签名，不再依赖第三方社区 API 存活）；unidbg 不可用时自动回退到社区 API。书城分类只走 unidbg 已提供的 `/api/fqnovel/category/front`、`/landing`、`/cell`（v0.0.6），不使用用户 Cookie，unidbg 不可用时书城提示暂不可用，不会改成关键词搜索。段评列表同样只走 unidbg `POST /api/fqcomment/list`（不在列表请求里预拉回复）。楼中楼在点击「展开」后才请求：先试已公开的 fqapi `GET /api/v1/comments/{id}/replies`，为空或失败再试 unidbg `POST /api/fqcomment/reply/list`。`expand.reply_show_count` 只是展示槽位，不作为回复条数。
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
 | `UNIDBG_API` | `http://127.0.0.1:8099` | unidbg 签名代理地址（搜索/详情/正文/段评） |
+| `FQAPI_API` | `http://127.0.0.1:18921` | 段评楼中楼兜底（fqapi-core）。仅 `GET /api/v1/comments/{id}/replies`。设为空则关闭。Docker 里若 fqapi 不在容器内，改成宿主机可达地址 |
+| `FQAPI_TOKEN` | 空 | fqapi 开启鉴权时的 Bearer token |
 | `PARA_COMMENT_MOCK` | `false` | **仅供开发调试**：没启动 unidbg 时预览段评格式/样式（假数据），日常使用与生产环境保持 `false` |
 | `COMMUNITY_API` | `http://101.35.133.34:5000,https://tt.sjmyzq.cn` | 备用社区 API，逗号分隔多实例按序轮询（unidbg 不可用时兜底） |
 | `UNIDBG_ADMIN_PASSWORD` | 无 | Docker 部署必填；可用 `openssl rand -base64 32` 生成 |

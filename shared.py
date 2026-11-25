@@ -16,6 +16,11 @@ COMMUNITY_APIS = [
     ).split(",") if u.strip()
 ]
 UNIDBG_API = os.environ.get("UNIDBG_API", "http://127.0.0.1:8099")
+# 段评楼中楼兜底：unidbg POST /api/fqcomment/reply/list 常返回空 reply_list。
+# 只用于已公开的 GET /api/v1/comments/{id}/replies，不接管搜索/正文/段评列表。
+# 设为空字符串可关闭。未启动 fqapi 时连接会被拒绝，回复接口立刻改走 unidbg。
+FQAPI_API = os.environ.get("FQAPI_API", "http://127.0.0.1:18921").rstrip("/")
+FQAPI_TOKEN = os.environ.get("FQAPI_TOKEN", "").strip()
 # 段评 Mock 仅供开发调试：没启动 unidbg 时预览段评的格式和样式用。
 # 生产/日常使用必须保持 false（默认），否则段评显示的是假数据。
 PARA_COMMENT_MOCK = os.environ.get("PARA_COMMENT_MOCK", "false").lower() in ("true", "1", "yes")
