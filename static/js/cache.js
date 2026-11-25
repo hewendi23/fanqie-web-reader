@@ -3,8 +3,8 @@ const cache = { detail: {}, content: new Map() };
 const CONTENT_CACHE_MAX = 20;
 const inflight = {};
 
-// 正文缓存换代：旧缓存是剥掉插图之后的纯文本，继续用会让插图章节永远不显示图。
-const CONTENT_IDB_PREFIX = 'c2:';
+// 正文缓存换代：c2 把章节标题 h1 收成第 0 段，段评序号比官方 p idx 大 1。
+const CONTENT_IDB_PREFIX = 'c3:';
 
 function setContentCache(key, val) {
   if (cache.content.has(key)) cache.content.delete(key);

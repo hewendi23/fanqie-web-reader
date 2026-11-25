@@ -11,6 +11,10 @@
 只按 ``<p>`` 抽文本会把这些插图整段丢掉。这里按文档顺序输出字符串段落：
 普通段落是纯文本；插图段落是我们自己生成的 ``<img src="绝对地址">``，图注放在同一段的
 ``<figcaption>`` 里。阅读器据此渲染图片，并且不把插图算进段评序号。
+
+段评接口只给正文 ``<p>`` 编号，从 0 开始。章节标题是 ``<h1 class="chapterTitle1" idx="10000">``，
+不是第 0 段；把它收进段落数组会让后面每一段的段评都错到下一段。同一个 ``<p>`` 里的
+``<br>`` 或换行也不拆开，否则标题之后的段落还会再错一位。
 """
 
 from __future__ import annotations
@@ -23,8 +27,11 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup, NavigableString, Tag
 
 _IMAGE_CLASS_TOKENS = {"image", "illus", "illustration", "picture", "pic"}
-_BLOCK_TAGS = {"p", "blk", "h1", "h2", "h3", "h4", "li"}
+_HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+_BLOCK_TAGS = {"p", "blk", "li"}
 _SKIP_TAGS = {"script", "style", "tt_keyword_ad", "head", "title", "meta", "link"}
+# 官方章节标题的 idx。正文 <p> 从 0 连续编号，标题固定用这个哨兵值。
+_TITLE_IDX_MIN = 10000
 _CAPTION_TAGS = {"blk", "figcaption", "span", "p"}
 _CDN_SUFFIXES = (
     "byteimg.com",
@@ -147,6 +154,68 @@ def _pic_url(pic) -> str | None:
     return None
 
 
+def _official_idx(tag: Tag) -> int | None:
+    raw = tag.get("idx")
+    if raw is None or isinstance(raw, list):
+        return None
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _has_chapter_title_class(tag: Tag) -> bool:
+    for token in _class_tokens(tag):
+        compact = token.replace("-", "").replace("_", "")
+        if "chaptertitle" in compact:
+            return True
+    return False
+
+
+def _is_chapter_title(tag: Tag) -> bool:
+    """标题不占段评序号。官方标题是 h1.chapterTitle1，idx 通常为 10000。
+
+    只跳过标题块本身。内部还包着正文 ``<p>`` 的容器不能整棵丢掉。
+    """
+    name = (tag.name or "").lower()
+    if name in _HEADING_TAGS:
+        return True
+    if tag.find("p") is not None:
+        return False
+    if _has_chapter_title_class(tag):
+        return True
+    if name in _BLOCK_TAGS:
+        idx = _official_idx(tag)
+        if idx is not None and (idx < 0 or idx >= _TITLE_IDX_MIN):
+            return True
+    return False
+
+
+def _collect_images(node, parts: list[tuple]) -> None:
+    """标题块本身不进正文，但里面的插图仍按阅读顺序保留。"""
+    children = getattr(node, "children", None)
+    if children is None:
+        return
+    for child in children:
+        if not isinstance(child, Tag):
+            continue
+        name = (child.name or "").lower()
+        if name in _SKIP_TAGS:
+            continue
+        image = _image_block(child)
+        if image is not None:
+            url, caption = image
+            if url:
+                parts.append(("img", url, caption))
+            continue
+        if name in ("img", "source"):
+            url = _img_url_from_tag(child)
+            if url:
+                parts.append(("img", url, ""))
+            continue
+        _collect_images(child, parts)
+
+
 def _walk(node, parts: list[tuple]) -> None:
     children = getattr(node, "children", None)
     if children is None:
@@ -155,12 +224,15 @@ def _walk(node, parts: list[tuple]) -> None:
         if isinstance(child, NavigableString):
             text = str(child).replace("\xa0", " ")
             if text.strip():
-                parts.append(("text", text))
+                parts.append(("text", text, False))
             continue
         if not isinstance(child, Tag):
             continue
         name = (child.name or "").lower()
         if name in _SKIP_TAGS:
+            continue
+        if _is_chapter_title(child):
+            _collect_images(child, parts)
             continue
         image = _image_block(child)
         if image is not None:
@@ -174,7 +246,8 @@ def _walk(node, parts: list[tuple]) -> None:
             else:
                 text = _text_of(child)
                 if text:
-                    parts.append(("text", text))
+                    # 一个官方块只对应一个段评序号，不按 <br> / 换行再切开。
+                    parts.append(("text", text, True))
             continue
         if name in ("img", "source"):
             url = _img_url_from_tag(child)
@@ -271,8 +344,9 @@ def _class_tokens(tag: Tag) -> set[str]:
 
 
 def _text_of(tag: Tag) -> str:
+    # 去掉 <br> 本身，保留它两侧的文字。不要换成换行，否则同一段会被拆成两段。
     for br in tag.find_all("br"):
-        br.replace_with("\n")
+        br.replace_with("")
     return tag.get_text("", strip=False).replace("\xa0", " ").strip()
 
 
@@ -340,6 +414,11 @@ def _emit(parts: list[tuple]) -> list[str]:
             continue
         text = str(part[1]).replace("\xa0", " ").strip()
         if not text:
+            continue
+        # 来自同一个 <p>/<blk> 的文本保持一段。没有标签的纯文本仍按空行分段。
+        atomic = bool(part[2]) if len(part) > 2 else False
+        if atomic:
+            out.append(text)
             continue
         for line in re.split(r"\n+", text):
             line = line.strip()
